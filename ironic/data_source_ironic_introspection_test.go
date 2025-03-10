@@ -1,3 +1,4 @@
+//go:build acceptance
 // +build acceptance
 
 package ironic
@@ -10,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
+	th "github.com/appkins-org/terraform-provider-ironic/testhelper"
 	gth "github.com/gophercloud/gophercloud/testhelper"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
-	th "github.com/openshift-metal3/terraform-provider-ironic/testhelper"
 )
 
 // TestAccIntrospection creates a node resource that is inspected, and verifies the introspection data source returns

@@ -1,3 +1,4 @@
+//go:build acceptance
 // +build acceptance
 
 package ironic
@@ -6,12 +7,12 @@ import (
 	"fmt"
 	"testing"
 
+	th "github.com/appkins-org/terraform-provider-ironic/testhelper"
 	"github.com/gophercloud/gophercloud"
 	"github.com/gophercloud/gophercloud/openstack/baremetal/v1/allocations"
 	"github.com/gophercloud/gophercloud/openstack/baremetal/v1/nodes"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-	th "github.com/openshift-metal3/terraform-provider-ironic/testhelper"
 )
 
 // Creates a node, and an allocation that should use it

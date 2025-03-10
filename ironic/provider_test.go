@@ -9,10 +9,10 @@ import (
 	"os"
 	"testing"
 
+	th "github.com/appkins-org/terraform-provider-ironic/testhelper"
 	gth "github.com/gophercloud/gophercloud/testhelper"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-	th "github.com/openshift-metal3/terraform-provider-ironic/testhelper"
 )
 
 var testAccProviders map[string]*schema.Provider

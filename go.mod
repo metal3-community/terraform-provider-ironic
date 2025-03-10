@@ -1,4 +1,4 @@
-module github.com/openshift-metal3/terraform-provider-ironic
+module github.com/appkins-org/terraform-provider-ironic
 
 go 1.18
 

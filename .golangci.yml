@@ -3,18 +3,11 @@ run:
 
 linters:
   disable-all: true
-  enable: [
-    "revive",
-    "govet",
-    "goimports",
-    "gofmt",
-    "gosec",
-    "staticcheck",
-  ]
+  enable: ["revive", "govet", "goimports", "gofmt", "gosec", "staticcheck"]
 
 linters-settings:
   goimports:
-    local-prefixes: "https://github.com/openshift-metal3/terraform-provider-ironic"
+    local-prefixes: "https://github.com/appkins-org/terraform-provider-ironic"
   govet:
     check-shadowing: false
 

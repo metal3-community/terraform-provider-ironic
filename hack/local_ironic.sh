@@ -13,10 +13,10 @@ IMAGE=${IMAGE:-quay.io/metal3-io/ironic:release-24.1}
 
 sudo $CONTAINER_RUNTIME run -d --net host --privileged --name ironic \
     --entrypoint /bin/runironic -e "PROVISIONING_IP=127.0.0.1" \
-    -e "USE_IRONIC_INSPECTOR=true" $IMAGE
+    -e "USE_IRONIC_INSPECTOR=true" "${IMAGE}"
 sudo $CONTAINER_RUNTIME run -d --net host --privileged --name ironic-inspector \
     --entrypoint /bin/runironic-inspector -e "PROVISIONING_IP=127.0.0.1" \
-    -e "USE_IRONIC_INSPECTOR=true" $IMAGE
+    -e "USE_IRONIC_INSPECTOR=true" "${IMAGE}"
 
 for attempt in {1..30}; do
     sleep 2

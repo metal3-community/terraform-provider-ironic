@@ -21,6 +21,9 @@ func resourceNodeV1() *schema.Resource {
 		Read:   resourceNodeV1Read,
 		Update: resourceNodeV1Update,
 		Delete: resourceNodeV1Delete,
+		Importer: &schema.ResourceImporter{
+			State: resourceNodeV1Import,
+		},
 
 		Schema: map[string]*schema.Schema{
 			"name": {
@@ -70,6 +73,10 @@ func resourceNodeV1() *schema.Resource {
 
 				// driver_info could contain passwords
 				Sensitive: true,
+			},
+			"instance_info": {
+				Type:     schema.TypeMap,
+				Optional: true,
 			},
 			"properties": {
 				Type:     schema.TypeMap,
@@ -241,6 +248,19 @@ func resourceNodeV1Create(d *schema.ResourceData, meta interface{}) error {
 		}
 	}
 
+	if instanceInfo := d.Get("instance_info").(map[string]any); len(instanceInfo) > 0 {
+		_, err = nodes.Update(client, d.Id(), nodes.UpdateOpts{
+			nodes.UpdateOperation{
+				Op:    nodes.ReplaceOp,
+				Path:  "/instance_info",
+				Value: instanceInfo,
+			},
+		}).Extract()
+		if err != nil {
+			return fmt.Errorf("could not update instance_info: %s", err)
+		}
+	}
+
 	// Make node manageable
 	if d.Get("manage").(bool) || d.Get("clean").(bool) || d.Get("inspect").(bool) {
 		if err := ChangeProvisionStateToTarget(client, d.Id(), "manage", nil, nil, nil); err != nil {
@@ -396,6 +416,117 @@ func resourceNodeV1Read(d *schema.ResourceData, meta interface{}) error {
 	return d.Set("provision_state", node.ProvisionState)
 }
 
+// Import the node's data from Ironic
+func resourceNodeV1Import(d *schema.ResourceData, meta interface{}) ([]*schema.ResourceData, error) {
+	client, err := meta.(*Clients).GetIronicClient()
+	if err != nil {
+		return []*schema.ResourceData{d}, err
+	}
+
+	node, err := nodes.Get(client, d.Id()).Extract()
+	if err != nil {
+		d.SetId("")
+		return []*schema.ResourceData{d}, err
+	}
+
+	// TODO: Ironic's Create is different than the Node object itself, GET returns things like the
+	//  RaidConfig, we need to add those and handle them in CREATE
+	err = d.Set("boot_interface", node.BootInterface)
+	if err != nil {
+		return nil, err
+	}
+	err = d.Set("conductor_group", node.ConductorGroup)
+	if err != nil {
+		return nil, err
+	}
+	err = d.Set("console_interface", node.ConsoleInterface)
+	if err != nil {
+		return []*schema.ResourceData{d}, err
+	}
+	err = d.Set("deploy_interface", node.DeployInterface)
+	if err != nil {
+		return []*schema.ResourceData{d}, err
+	}
+	err = d.Set("driver", node.Driver)
+	if err != nil {
+		return []*schema.ResourceData{d}, err
+	}
+	err = d.Set("driver_info", node.DriverInfo)
+	if err != nil {
+		return []*schema.ResourceData{d}, err
+	}
+	err = d.Set("extra", node.Extra)
+	if err != nil {
+		return []*schema.ResourceData{d}, err
+	}
+	err = d.Set("inspect_interface", node.InspectInterface)
+	if err != nil {
+		return []*schema.ResourceData{d}, err
+	}
+	err = d.Set("instance_uuid", node.InstanceUUID)
+	if err != nil {
+		return []*schema.ResourceData{d}, err
+	}
+	err = d.Set("management_interface", node.ManagementInterface)
+	if err != nil {
+		return []*schema.ResourceData{d}, err
+	}
+	err = d.Set("name", node.Name)
+	if err != nil {
+		return []*schema.ResourceData{d}, err
+	}
+	err = d.Set("network_interface", node.NetworkInterface)
+	if err != nil {
+		return []*schema.ResourceData{d}, err
+	}
+	err = d.Set("owner", node.Owner)
+	if err != nil {
+		return []*schema.ResourceData{d}, err
+	}
+	err = d.Set("power_interface", node.PowerInterface)
+	if err != nil {
+		return []*schema.ResourceData{d}, err
+	}
+	err = d.Set("power_state", node.PowerState)
+	if err != nil {
+		return []*schema.ResourceData{d}, err
+	}
+	err = d.Set("root_device", node.Properties["root_device"])
+	if err != nil {
+		return []*schema.ResourceData{d}, err
+	}
+	delete(node.Properties, "root_device")
+	err = d.Set("properties", node.Properties)
+	if err != nil {
+		return []*schema.ResourceData{d}, err
+	}
+	err = d.Set("raid_interface", node.RAIDInterface)
+	if err != nil {
+		return []*schema.ResourceData{d}, err
+	}
+	err = d.Set("rescue_interface", node.RescueInterface)
+	if err != nil {
+		return []*schema.ResourceData{d}, err
+	}
+	err = d.Set("resource_class", node.ResourceClass)
+	if err != nil {
+		return []*schema.ResourceData{d}, err
+	}
+	err = d.Set("storage_interface", node.StorageInterface)
+	if err != nil {
+		return []*schema.ResourceData{d}, err
+	}
+	err = d.Set("vendor_interface", node.VendorInterface)
+	if err != nil {
+		return []*schema.ResourceData{d}, err
+	}
+	err = d.Set("provision_state", node.ProvisionState)
+	if err != nil {
+		return []*schema.ResourceData{d}, err
+	}
+	return []*schema.ResourceData{d}, nil
+}
+
 // Update a node's state based on the terraform config - TODO: handle everything
 func resourceNodeV1Update(d *schema.ResourceData, meta interface{}) error {
 	client, err := meta.(*Clients).GetIronicClient()
@@ -437,6 +568,20 @@ func resourceNodeV1Update(d *schema.ResourceData, meta interface{}) error {
 			if _, err := UpdateNode(client, d.Id(), opts); err != nil {
 				return err
 			}
+		}
+	}
+
+	if d.HasChange("instance_info") && len(d.Get("instance_info").(map[string]any)) > 0 {
+		opts := nodes.UpdateOpts{
+			nodes.UpdateOperation{
+				Op:    nodes.ReplaceOp,
+				Path:  "/instance_info",
+				Value: d.Get("instance_info").(map[string]interface{}),
+			},
+		}
+
+		if _, err := UpdateNode(client, d.Id(), opts); err != nil {
+			return err
 		}
 	}
 

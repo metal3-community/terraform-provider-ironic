@@ -21,7 +21,7 @@ type provisionStateWorkflow struct {
 	wait        time.Duration
 	retryNumber int
 
-	configDrive interface{}
+	configDrive any
 	deploySteps []nodes.DeployStep
 	cleanSteps  []nodes.CleanStep
 
@@ -30,7 +30,7 @@ type provisionStateWorkflow struct {
 
 // ChangeProvisionStateToTarget drives Ironic's state machine through the process to reach our desired end state. This requires multiple
 // possibly long-running steps.  If required, we'll build a config drive ISO for deployment.
-func ChangeProvisionStateToTarget(client *gophercloud.ServiceClient, uuid string, target nodes.TargetProvisionState, configDrive interface{}, deploySteps []nodes.DeployStep, cleanSteps []nodes.CleanStep) error {
+func ChangeProvisionStateToTarget(client *gophercloud.ServiceClient, uuid string, target nodes.TargetProvisionState, configDrive any, deploySteps []nodes.DeployStep, cleanSteps []nodes.CleanStep) error {
 	// Run the provisionStateWorkflow - this could take a while
 	wf := provisionStateWorkflow{
 		target:      target,

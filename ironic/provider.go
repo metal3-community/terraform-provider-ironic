@@ -235,7 +235,7 @@ func init() {
 }
 
 // Creates a noauth Ironic client
-func configureProvider(schema *schema.ResourceData) (interface{}, error) {
+func configureProvider(schema *schema.ResourceData) (any, error) {
 	var clients Clients
 
 	url := schema.Get("url").(string)

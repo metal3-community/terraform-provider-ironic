@@ -138,13 +138,13 @@ func TestFetchFullIgnition(t *testing.T) {
 		},
 	)
 	certB64 := base64.URLEncoding.EncodeToString(certInPem)
-	emptyHeaders := make(map[string]interface{})
+	emptyHeaders := make(map[string]any)
 
 	testCases := []struct {
 		Scenario           string
 		UserDataURL        string
 		UserDataURLCACert  string
-		UserDataURLHeaders map[string]interface{}
+		UserDataURLHeaders map[string]any
 		ExpectedResult     string
 	}{
 		{
@@ -165,7 +165,7 @@ func TestFetchFullIgnition(t *testing.T) {
 			Scenario:           "user data url, ca cert and headers present",
 			UserDataURL:        server.URL,
 			UserDataURLCACert:  certB64,
-			UserDataURLHeaders: map[string]interface{}{"Test": "foo"},
+			UserDataURLHeaders: map[string]any{"Test": "foo"},
 			ExpectedResult:     "Header: Test=[foo]\nFull Ignition\n",
 		},
 		{

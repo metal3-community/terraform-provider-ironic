@@ -89,7 +89,7 @@ func resourceDeployment() *schema.Resource {
 }
 
 // Create an deployment, including driving Ironic's state machine
-func resourceDeploymentCreate(d *schema.ResourceData, meta interface{}) error {
+func resourceDeploymentCreate(d *schema.ResourceData, meta any) error {
 	client, err := meta.(*Clients).GetIronicClient()
 	if err != nil {
 		return err
@@ -100,7 +100,7 @@ func resourceDeploymentCreate(d *schema.ResourceData, meta interface{}) error {
 
 	nodeUUID := d.Get("node_uuid").(string)
 	// Set instance info
-	instanceInfo := d.Get("instance_info").(map[string]interface{})
+	instanceInfo := d.Get("instance_info").(map[string]any)
 	if instanceInfo != nil {
 		instanceInfoCapabilities, found := instanceInfo["capabilities"]
 		capabilities := make(map[string]string)
@@ -155,7 +155,7 @@ func resourceDeploymentCreate(d *schema.ResourceData, meta interface{}) error {
 	userData := d.Get("user_data").(string)
 	userDataURL := d.Get("user_data_url").(string)
 	userDataCaCert := d.Get("user_data_url_ca_cert").(string)
-	userDataHeaders := d.Get("user_data_url_headers").(map[string]interface{})
+	userDataHeaders := d.Get("user_data_url_headers").(map[string]any)
 
 	// if user_data_url is specified in addition to user_data, use the former
 	ignitionData, err := fetchFullIgnition(userDataURL, userDataCaCert, userDataHeaders)
@@ -168,8 +168,8 @@ func resourceDeploymentCreate(d *schema.ResourceData, meta interface{}) error {
 
 	configDrive, err := buildConfigDrive(client.Microversion,
 		userData,
-		d.Get("network_data").(map[string]interface{}),
-		d.Get("metadata").(map[string]interface{}))
+		d.Get("network_data").(map[string]any),
+		d.Get("metadata").(map[string]any))
 	if err != nil {
 		return err
 	}
@@ -179,7 +179,7 @@ func resourceDeploymentCreate(d *schema.ResourceData, meta interface{}) error {
 }
 
 // fetchFullIgnition gets full igntion from the URL and cert passed to it and returns userdata as a string
-func fetchFullIgnition(userDataURL string, userDataCaCert string, userDataHeaders map[string]interface{}) (string, error) {
+func fetchFullIgnition(userDataURL string, userDataCaCert string, userDataHeaders map[string]any) (string, error) {
 	// Send full ignition, if the URL is specified
 	if userDataURL != "" {
 		caCertPool := x509.NewCertPool()
@@ -245,7 +245,7 @@ func buildDeploySteps(steps string) ([]nodes.DeployStep, error) {
 
 // buildConfigDrive handles building a config drive appropriate for the Ironic version we are using.  Newer versions
 // support sending the user data directly, otherwise we need to build an ISO image
-func buildConfigDrive(apiVersion, userData string, networkData, metaData map[string]interface{}) (interface{}, error) {
+func buildConfigDrive(apiVersion, userData string, networkData, metaData map[string]any) (any, error) {
 	actual, err := version.NewVersion(apiVersion)
 	if err != nil {
 		return nil, err
@@ -277,7 +277,7 @@ func buildConfigDrive(apiVersion, userData string, networkData, metaData map[str
 }
 
 // Read the deployment's data from Ironic
-func resourceDeploymentRead(d *schema.ResourceData, meta interface{}) error {
+func resourceDeploymentRead(d *schema.ResourceData, meta any) error {
 	client, err := meta.(*Clients).GetIronicClient()
 	if err != nil {
 		return err
@@ -298,7 +298,7 @@ func resourceDeploymentRead(d *schema.ResourceData, meta interface{}) error {
 }
 
 // Delete an deployment from Ironic - this cleans the node and returns it's state to 'available'
-func resourceDeploymentDelete(d *schema.ResourceData, meta interface{}) error {
+func resourceDeploymentDelete(d *schema.ResourceData, meta any) error {
 	client, err := meta.(*Clients).GetIronicClient()
 	if err != nil {
 		return err

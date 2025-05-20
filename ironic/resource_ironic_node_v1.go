@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"time"
 
 	"github.com/gophercloud/gophercloud"
@@ -199,7 +200,7 @@ func resourceNodeV1() *schema.Resource {
 }
 
 // Create a node, including driving Ironic's state machine
-func resourceNodeV1Create(d *schema.ResourceData, meta interface{}) error {
+func resourceNodeV1Create(d *schema.ResourceData, meta any) error {
 	client, err := meta.(*Clients).GetIronicClient()
 	if err != nil {
 		return err
@@ -222,7 +223,7 @@ func resourceNodeV1Create(d *schema.ResourceData, meta interface{}) error {
 	if portSet != nil {
 		portList := portSet.List()
 		for _, portInterface := range portList {
-			port := portInterface.(map[string]interface{})
+			port := portInterface.(map[string]any)
 
 			// Terraform map can't handle bool... seriously.
 			var pxeEnabled bool
@@ -310,7 +311,7 @@ func resourceNodeV1Create(d *schema.ResourceData, meta interface{}) error {
 }
 
 // Read the node's data from Ironic
-func resourceNodeV1Read(d *schema.ResourceData, meta interface{}) error {
+func resourceNodeV1Read(d *schema.ResourceData, meta any) error {
 	client, err := meta.(*Clients).GetIronicClient()
 	if err != nil {
 		return err
@@ -389,7 +390,7 @@ func resourceNodeV1Read(d *schema.ResourceData, meta interface{}) error {
 		return err
 	}
 	delete(node.Properties, "root_device")
-	err = d.Set("properties", node.Properties)
+	err = d.Set("properties", cleanProperties(node.Properties))
 	if err != nil {
 		return err
 	}
@@ -417,7 +418,7 @@ func resourceNodeV1Read(d *schema.ResourceData, meta interface{}) error {
 }
 
 // Import the node's data from Ironic
-func resourceNodeV1Import(d *schema.ResourceData, meta interface{}) ([]*schema.ResourceData, error) {
+func resourceNodeV1Import(d *schema.ResourceData, meta any) ([]*schema.ResourceData, error) {
 	client, err := meta.(*Clients).GetIronicClient()
 	if err != nil {
 		return []*schema.ResourceData{d}, err
@@ -496,7 +497,7 @@ func resourceNodeV1Import(d *schema.ResourceData, meta interface{}) ([]*schema.R
 		return []*schema.ResourceData{d}, err
 	}
 	delete(node.Properties, "root_device")
-	err = d.Set("properties", node.Properties)
+	err = d.Set("properties", cleanProperties(node.Properties))
 	if err != nil {
 		return []*schema.ResourceData{d}, err
 	}
@@ -528,7 +529,7 @@ func resourceNodeV1Import(d *schema.ResourceData, meta interface{}) ([]*schema.R
 }
 
 // Update a node's state based on the terraform config - TODO: handle everything
-func resourceNodeV1Update(d *schema.ResourceData, meta interface{}) error {
+func resourceNodeV1Update(d *schema.ResourceData, meta any) error {
 	client, err := meta.(*Clients).GetIronicClient()
 	if err != nil {
 		return err
@@ -576,7 +577,7 @@ func resourceNodeV1Update(d *schema.ResourceData, meta interface{}) error {
 			nodes.UpdateOperation{
 				Op:    nodes.ReplaceOp,
 				Path:  "/instance_info",
-				Value: d.Get("instance_info").(map[string]interface{}),
+				Value: d.Get("instance_info").(map[string]any),
 			},
 		}
 
@@ -642,7 +643,7 @@ func resourceNodeV1Update(d *schema.ResourceData, meta interface{}) error {
 }
 
 // Delete a node from Ironic
-func resourceNodeV1Delete(d *schema.ResourceData, meta interface{}) error {
+func resourceNodeV1Delete(d *schema.ResourceData, meta any) error {
 	client, err := meta.(*Clients).GetIronicClient()
 	if err != nil {
 		return err
@@ -655,9 +656,9 @@ func resourceNodeV1Delete(d *schema.ResourceData, meta interface{}) error {
 	return nodes.Delete(client, d.Id()).ExtractErr()
 }
 
-func propertiesMerge(d *schema.ResourceData, key string) map[string]interface{} {
-	properties := d.Get("properties").(map[string]interface{})
-	properties[key] = d.Get(key).(map[string]interface{})
+func propertiesMerge(d *schema.ResourceData, key string) map[string]any {
+	properties := d.Get("properties").(map[string]any)
+	properties[key] = d.Get(key).(map[string]any)
 	return properties
 }
 
@@ -671,8 +672,8 @@ func schemaToCreateOpts(d *schema.ResourceData) *nodes.CreateOpts {
 		ConsoleInterface:    d.Get("console_interface").(string),
 		DeployInterface:     d.Get("deploy_interface").(string),
 		Driver:              d.Get("driver").(string),
-		DriverInfo:          d.Get("driver_info").(map[string]interface{}),
-		Extra:               d.Get("extra").(map[string]interface{}),
+		DriverInfo:          d.Get("driver_info").(map[string]any),
+		Extra:               d.Get("extra").(map[string]any),
 		InspectInterface:    d.Get("inspect_interface").(string),
 		ManagementInterface: d.Get("management_interface").(string),
 		Name:                d.Get("name").(string),
@@ -780,7 +781,7 @@ func setRAIDConfig(client *gophercloud.ServiceClient, d *schema.ResourceData) (e
 	}
 
 	// Set root volume
-	if len(d.Get("root_device").(map[string]interface{})) == 0 {
+	if len(d.Get("root_device").(map[string]any)) == 0 {
 		logicalDisks[0].IsRootVolume = new(bool)
 		*logicalDisks[0].IsRootVolume = true
 	} else {
@@ -823,7 +824,7 @@ func buildManualCleaningSteps(raidInterface, raidConfig, biosSetings string) (cl
 			nodes.CleanStep{
 				Interface: "bios",
 				Step:      "apply_configuration",
-				Args: map[string]interface{}{
+				Args: map[string]any{
 					"settings": settings,
 				},
 			},
@@ -831,4 +832,32 @@ func buildManualCleaningSteps(raidInterface, raidConfig, biosSetings string) (cl
 	}
 
 	return
+}
+
+func cleanProperties(nodeProperties map[string]any) map[string]any {
+	// Clean up the properties map to remove any sensitive data
+	properties := make(map[string]any)
+	for k, v := range nodeProperties {
+		switch typedValue := v.(type) {
+		case string:
+			properties[k] = typedValue
+		case bool:
+			properties[k] = strconv.FormatBool(typedValue)
+		case int:
+			properties[k] = strconv.FormatInt(int64(typedValue), 10)
+		case int32:
+			properties[k] = strconv.FormatInt(int64(typedValue), 10)
+		case int64:
+			properties[k] = strconv.FormatInt(typedValue, 10)
+		case float32:
+			properties[k] = strconv.FormatFloat(float64(typedValue), 'f', -1, 32)
+		case float64:
+			properties[k] = strconv.FormatFloat(typedValue, 'f', -1, 64)
+		case map[string]any:
+			properties[k] = typedValue
+		default:
+			properties[k] = fmt.Sprintf("%v", v)
+		}
+	}
+	return properties
 }

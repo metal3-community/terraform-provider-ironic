@@ -67,7 +67,7 @@ func dataSourceIronicIntrospection() *schema.Resource {
 	}
 }
 
-func dataSourceIronicIntrospectionRead(d *schema.ResourceData, meta interface{}) error {
+func dataSourceIronicIntrospectionRead(d *schema.ResourceData, meta any) error {
 	client, err := meta.(*Clients).GetInspectorClient()
 	if err != nil {
 		return err

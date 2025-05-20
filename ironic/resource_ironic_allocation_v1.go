@@ -67,7 +67,7 @@ func resourceAllocationV1() *schema.Resource {
 }
 
 // Create an allocation, including driving Ironic's state machine
-func resourceAllocationV1Create(d *schema.ResourceData, meta interface{}) error {
+func resourceAllocationV1Create(d *schema.ResourceData, meta any) error {
 	client, err := meta.(*Clients).GetIronicClient()
 	if err != nil {
 		return err
@@ -111,7 +111,7 @@ func resourceAllocationV1Create(d *schema.ResourceData, meta interface{}) error 
 }
 
 // Read the allocation's data from Ironic
-func resourceAllocationV1Read(d *schema.ResourceData, meta interface{}) error {
+func resourceAllocationV1Read(d *schema.ResourceData, meta any) error {
 	client, err := meta.(*Clients).GetIronicClient()
 	if err != nil {
 		return err
@@ -154,7 +154,7 @@ func resourceAllocationV1Read(d *schema.ResourceData, meta interface{}) error {
 }
 
 // Delete an allocation from Ironic if it exists
-func resourceAllocationV1Delete(d *schema.ResourceData, meta interface{}) error {
+func resourceAllocationV1Delete(d *schema.ResourceData, meta any) error {
 	client, err := meta.(*Clients).GetIronicClient()
 	if err != nil {
 		return err
@@ -169,9 +169,9 @@ func resourceAllocationV1Delete(d *schema.ResourceData, meta interface{}) error 
 }
 
 func allocationSchemaToCreateOpts(d *schema.ResourceData) *allocations.CreateOpts {
-	candidateNodesRaw := d.Get("candidate_nodes").([]interface{})
-	traitsRaw := d.Get("traits").([]interface{})
-	extraRaw := d.Get("extra").(map[string]interface{})
+	candidateNodesRaw := d.Get("candidate_nodes").([]any)
+	traitsRaw := d.Get("traits").([]any)
+	extraRaw := d.Get("extra").(map[string]any)
 
 	candidateNodes := make([]string, len(candidateNodesRaw))
 	for i := range candidateNodesRaw {

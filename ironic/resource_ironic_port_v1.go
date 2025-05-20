@@ -49,7 +49,7 @@ func resourcePortV1() *schema.Resource {
 	}
 }
 
-func resourcePortV1Create(d *schema.ResourceData, meta interface{}) error {
+func resourcePortV1Create(d *schema.ResourceData, meta any) error {
 	client, err := meta.(*Clients).GetIronicClient()
 	if err != nil {
 		return err
@@ -65,7 +65,7 @@ func resourcePortV1Create(d *schema.ResourceData, meta interface{}) error {
 	return resourcePortV1Read(d, meta)
 }
 
-func resourcePortV1Read(d *schema.ResourceData, meta interface{}) error {
+func resourcePortV1Read(d *schema.ResourceData, meta any) error {
 	client, err := meta.(*Clients).GetIronicClient()
 	if err != nil {
 		return err
@@ -107,12 +107,12 @@ func resourcePortV1Read(d *schema.ResourceData, meta interface{}) error {
 	return d.Set("is_smart_nic", port.IsSmartNIC)
 }
 
-func resourcePortV1Update(_ *schema.ResourceData, _ interface{}) error {
+func resourcePortV1Update(_ *schema.ResourceData, _ any) error {
 	return nil
 
 }
 
-func resourcePortV1Delete(_ *schema.ResourceData, _ interface{}) error {
+func resourcePortV1Delete(_ *schema.ResourceData, _ any) error {
 	return nil
 
 }
@@ -125,10 +125,10 @@ func portSchemaToCreateOpts(d *schema.ResourceData) *ports.CreateOpts {
 		NodeUUID:      d.Get("node_uuid").(string),
 		Address:       d.Get("address").(string),
 		PortGroupUUID: d.Get("port_group_uuid").(string),
-		//LocalLinkConnection: d.Get("local_link_collection").(map[string]interface{}),
+		//LocalLinkConnection: d.Get("local_link_collection").(map[string]any),
 		PXEEnabled:      &pxeEnabled,
 		PhysicalNetwork: d.Get("physical_network").(string),
-		//Extra:               d.Get("extra").(map[string]interface{}),
+		//Extra:               d.Get("extra").(map[string]any),
 		IsSmartNIC: &isSmartNic,
 	}
 

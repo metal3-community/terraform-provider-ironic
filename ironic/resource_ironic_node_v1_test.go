@@ -1,3 +1,4 @@
+//go:build acceptance
 // +build acceptance
 
 package ironic
@@ -215,7 +216,7 @@ func TestBuildManualCleaningSteps(t *testing.T) {
 				{
 					Interface: "bios",
 					Step:      "apply_configuration",
-					Args: map[string]interface{}{
+					Args: map[string]any{
 						"settings": []map[string]string{
 							{
 								"name":  "cpu_vt_enabled",
@@ -247,7 +248,7 @@ func TestBuildManualCleaningSteps(t *testing.T) {
 				{
 					Interface: "bios",
 					Step:      "apply_configuration",
-					Args: map[string]interface{}{
+					Args: map[string]any{
 						"settings": []map[string]string{
 							{
 								"name":  "cpu_vt_enabled",

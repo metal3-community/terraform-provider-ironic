@@ -41,7 +41,7 @@ func TestProvider(t *testing.T) {
 	testAccPreCheck(t)
 
 	p := Provider()
-	raw := map[string]interface{}{
+	raw := map[string]any{
 		"url":          "http://localhost:6385/v1",
 		"microversion": "1.52",
 	}
@@ -59,7 +59,7 @@ func TestProvider_clientTimeout(t *testing.T) {
 	defer gth.TeardownHTTP()
 	handleProviderTimeoutRequest(t)
 
-	raw := map[string]interface{}{
+	raw := map[string]any{
 		"url":     gth.Server.URL + "/",
 		"timeout": 90,
 	}
@@ -77,7 +77,7 @@ func TestProvider_urlRequired(t *testing.T) {
 	testAccPreCheck(t)
 
 	p := Provider()
-	raw := map[string]interface{}{}
+	raw := map[string]any{}
 
 	ironicEndpoint := os.Getenv("IRONIC_ENDPOINT")
 	os.Unsetenv("IRONIC_ENDPOINT")

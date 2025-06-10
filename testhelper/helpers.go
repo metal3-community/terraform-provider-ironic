@@ -10,7 +10,7 @@ import (
 
 func init() {
 	// Ensure we seed the RNG so generated names aren't deterministic
-	rand.Seed(time.Now().UTC().UnixNano())
+	rand.New(rand.NewSource(time.Now().UnixNano()))
 }
 
 func AssertNoError(t *testing.T, err error) {

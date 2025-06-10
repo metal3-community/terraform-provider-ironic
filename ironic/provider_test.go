@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	th "github.com/appkins-org/terraform-provider-ironic/testhelper"
-	gth "github.com/gophercloud/gophercloud/testhelper"
+	gth "github.com/gophercloud/gophercloud/v2/testhelper"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 )

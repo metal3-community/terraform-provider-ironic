@@ -1,15 +1,18 @@
 package ironic
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"strconv"
 	"time"
 
-	"github.com/gophercloud/gophercloud"
-	"github.com/gophercloud/gophercloud/openstack/baremetal/v1/nodes"
-	"github.com/gophercloud/gophercloud/openstack/baremetal/v1/ports"
+	"github.com/gophercloud/gophercloud/v2"
+	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/v1/nodes"
+	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/v1/ports"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	metal3v1alpha1 "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
 	"github.com/metal3-io/baremetal-operator/pkg/provisioner/ironic"
@@ -18,12 +21,12 @@ import (
 // Schema resource definition for an Ironic node.
 func resourceNodeV1() *schema.Resource {
 	return &schema.Resource{
-		Create: resourceNodeV1Create,
-		Read:   resourceNodeV1Read,
-		Update: resourceNodeV1Update,
-		Delete: resourceNodeV1Delete,
+		CreateContext: resourceNodeV1Create,
+		ReadContext:   resourceNodeV1Read,
+		UpdateContext: resourceNodeV1Update,
+		DeleteContext: resourceNodeV1Delete,
 		Importer: &schema.ResourceImporter{
-			State: resourceNodeV1Import,
+			StateContext: resourceNodeV1Import,
 		},
 
 		Schema: map[string]*schema.Schema{
@@ -176,8 +179,8 @@ func resourceNodeV1() *schema.Resource {
 				Optional: true,
 
 				// If power_state is same as target_power_state, we have no changes to apply
-				DiffSuppressFunc: func(_, _, new string, d *schema.ResourceData) bool {
-					return new == d.Get("power_state").(string)
+				DiffSuppressFunc: func(_, _, newState string, d *schema.ResourceData) bool {
+					return newState == d.Get("power_state").(string)
 				},
 			},
 			"power_state_timeout": {
@@ -199,19 +202,19 @@ func resourceNodeV1() *schema.Resource {
 	}
 }
 
-// Create a node, including driving Ironic's state machine
-func resourceNodeV1Create(d *schema.ResourceData, meta any) error {
+// Create a node, including driving Ironic's state machine.
+func resourceNodeV1Create(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
 	client, err := meta.(*Clients).GetIronicClient()
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 
 	// Create the node object in Ironic
-	createOpts := schemaToCreateOpts(d)
-	result, err := nodes.Create(client, createOpts).Extract()
+	createOpts := schemaToCreateOpts(ctx, d)
+	result, err := nodes.Create(ctx, client, createOpts).Extract()
 	if err != nil {
 		d.SetId("")
-		return err
+		return diag.FromErr(err)
 	}
 
 	// Setting the ID is what tells terraform we were successful in creating the node
@@ -233,7 +236,6 @@ func resourceNodeV1Create(d *schema.ResourceData, meta any) error {
 				} else {
 					pxeEnabled = false
 				}
-
 			}
 			// FIXME: All values other than address and pxe
 			portCreateOpts := ports.CreateOpts{
@@ -241,16 +243,16 @@ func resourceNodeV1Create(d *schema.ResourceData, meta any) error {
 				Address:    port["address"].(string),
 				PXEEnabled: &pxeEnabled,
 			}
-			_, err := ports.Create(client, portCreateOpts).Extract()
+			_, err := ports.Create(ctx, client, portCreateOpts).Extract()
 			if err != nil {
-				_ = resourcePortV1Read(d, meta)
-				return err
+				_ = resourcePortV1Read(ctx, d, meta)
+				return diag.FromErr(err)
 			}
 		}
 	}
 
 	if instanceInfo := d.Get("instance_info").(map[string]any); len(instanceInfo) > 0 {
-		_, err = nodes.Update(client, d.Id(), nodes.UpdateOpts{
+		_, err = nodes.Update(ctx, client, d.Id(), nodes.UpdateOpts{
 			nodes.UpdateOperation{
 				Op:    nodes.ReplaceOp,
 				Path:  "/instance_info",
@@ -258,173 +260,177 @@ func resourceNodeV1Create(d *schema.ResourceData, meta any) error {
 			},
 		}).Extract()
 		if err != nil {
-			return fmt.Errorf("could not update instance_info: %s", err)
+			return diag.FromErr(fmt.Errorf("could not update instance_info: %s", err))
 		}
 	}
 
 	// Make node manageable
 	if d.Get("manage").(bool) || d.Get("clean").(bool) || d.Get("inspect").(bool) {
-		if err := ChangeProvisionStateToTarget(client, d.Id(), "manage", nil, nil, nil); err != nil {
-			return fmt.Errorf("could not manage: %s", err)
+		if err := ChangeProvisionStateToTarget(ctx, client, d.Id(), "manage", nil, nil, nil); err != nil {
+			return diag.FromErr(fmt.Errorf("could not manage: %s", err))
 		}
 	}
 
 	// Clean node
 	if d.Get("clean").(bool) {
-		if err := setRAIDConfig(client, d); err != nil {
-			return fmt.Errorf("fail to set raid config: %s", err)
+		if err := setRAIDConfig(ctx, client, d); err != nil {
+			return diag.FromErr(fmt.Errorf("fail to set raid config: %s", err))
 		}
 
 		var cleanSteps []nodes.CleanStep
 		if cleanSteps, err = buildManualCleaningSteps(d.Get("raid_interface").(string), d.Get("raid_config").(string), d.Get("bios_settings").(string)); err != nil {
-			return fmt.Errorf("fail to build raid clean steps: %s", err)
+			return diag.FromErr(fmt.Errorf("fail to build raid clean steps: %s", err))
 		}
 
-		if err := ChangeProvisionStateToTarget(client, d.Id(), "clean", nil, nil, cleanSteps); err != nil {
-			return fmt.Errorf("could not clean: %s", err)
+		if err := ChangeProvisionStateToTarget(ctx, client, d.Id(), "clean", nil, nil, cleanSteps); err != nil {
+			return diag.FromErr(fmt.Errorf("could not clean: %s", err))
 		}
 	}
 
 	// Inspect node
-	if d.Get("inspect").(bool) {
-		if err := ChangeProvisionStateToTarget(client, d.Id(), "inspect", nil, nil, nil); err != nil {
-			return fmt.Errorf("could not inspect: %s", err)
+	if inspect, ok := d.Get("inspect").(bool); ok && inspect {
+		if err := ChangeProvisionStateToTarget(ctx, client, d.Id(), "inspect", nil, nil, nil); err != nil {
+			return diag.FromErr(fmt.Errorf("could not inspect: %s", err))
 		}
 	}
 
 	// Make node available
-	if d.Get("available").(bool) {
-		if err := ChangeProvisionStateToTarget(client, d.Id(), "provide", nil, nil, nil); err != nil {
-			return fmt.Errorf("could not make node available: %s", err)
+	if available, ok := d.Get("available").(bool); ok && available {
+		if err := ChangeProvisionStateToTarget(ctx, client, d.Id(), "provide", nil, nil, nil); err != nil {
+			return diag.FromErr(fmt.Errorf("could not make node available: %s", err))
 		}
 	}
 
 	// Change power state, if required
-	if targetPowerState := d.Get("target_power_state").(string); targetPowerState != "" {
-		err := changePowerState(client, d, nodes.TargetPowerState(targetPowerState))
+	if targetPowerState, ok := d.Get("target_power_state").(string); ok && targetPowerState != "" {
+		err := changePowerState(ctx, client, d, nodes.TargetPowerState(targetPowerState))
 		if err != nil {
-			return fmt.Errorf("could not change power state: %s", err)
+			return diag.FromErr(fmt.Errorf("could not change power state: %s", err))
 		}
 	}
 
-	return resourceNodeV1Read(d, meta)
+	return resourceNodeV1Read(ctx, d, meta)
 }
 
-// Read the node's data from Ironic
-func resourceNodeV1Read(d *schema.ResourceData, meta any) error {
-	client, err := meta.(*Clients).GetIronicClient()
+// Read the node's data from Ironic.
+func resourceNodeV1Read(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
+	clients, ok := meta.(*Clients)
+	if !ok {
+		return diag.FromErr(fmt.Errorf("expected meta to be of type *Clients, got %T", meta))
+	}
+	client, err := clients.GetIronicClient()
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 
-	node, err := nodes.Get(client, d.Id()).Extract()
+	node, err := nodes.Get(ctx, client, d.Id()).Extract()
 	if err != nil {
 		d.SetId("")
-		return err
+		return diag.FromErr(err)
 	}
 
 	// TODO: Ironic's Create is different than the Node object itself, GET returns things like the
 	//  RaidConfig, we need to add those and handle them in CREATE
 	err = d.Set("boot_interface", node.BootInterface)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("conductor_group", node.ConductorGroup)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("console_interface", node.ConsoleInterface)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("deploy_interface", node.DeployInterface)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("driver", node.Driver)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("driver_info", node.DriverInfo)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("extra", node.Extra)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("inspect_interface", node.InspectInterface)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("instance_uuid", node.InstanceUUID)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("management_interface", node.ManagementInterface)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("name", node.Name)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("network_interface", node.NetworkInterface)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("owner", node.Owner)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("power_interface", node.PowerInterface)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("power_state", node.PowerState)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("root_device", node.Properties["root_device"])
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	delete(node.Properties, "root_device")
 	err = d.Set("properties", cleanProperties(node.Properties))
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("raid_interface", node.RAIDInterface)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("rescue_interface", node.RescueInterface)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("resource_class", node.ResourceClass)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("storage_interface", node.StorageInterface)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("vendor_interface", node.VendorInterface)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
-	return d.Set("provision_state", node.ProvisionState)
+	return diag.FromErr(d.Set("provision_state", node.ProvisionState))
 }
 
-// Import the node's data from Ironic
-func resourceNodeV1Import(d *schema.ResourceData, meta any) ([]*schema.ResourceData, error) {
+// Import the node's data from Ironic.
+func resourceNodeV1Import(ctx context.Context, d *schema.ResourceData, meta any) ([]*schema.ResourceData, error) {
 	client, err := meta.(*Clients).GetIronicClient()
 	if err != nil {
 		return []*schema.ResourceData{d}, err
 	}
 
-	node, err := nodes.Get(client, d.Id()).Extract()
+	node, err := nodes.Get(ctx, client, d.Id()).Extract()
 	if err != nil {
 		d.SetId("")
 		return []*schema.ResourceData{d}, err
@@ -528,11 +534,11 @@ func resourceNodeV1Import(d *schema.ResourceData, meta any) ([]*schema.ResourceD
 	return []*schema.ResourceData{d}, nil
 }
 
-// Update a node's state based on the terraform config - TODO: handle everything
-func resourceNodeV1Update(d *schema.ResourceData, meta any) error {
+// Update a node's state based on the terraform config - TODO: handle everything.
+func resourceNodeV1Update(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
 	client, err := meta.(*Clients).GetIronicClient()
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 
 	d.Partial(true)
@@ -566,8 +572,8 @@ func resourceNodeV1Update(d *schema.ResourceData, meta any) error {
 				},
 			}
 
-			if _, err := UpdateNode(client, d.Id(), opts); err != nil {
-				return err
+			if _, err := UpdateNode(ctx, client, d.Id(), opts); err != nil {
+				return diag.FromErr(err)
 			}
 		}
 	}
@@ -581,8 +587,8 @@ func resourceNodeV1Update(d *schema.ResourceData, meta any) error {
 			},
 		}
 
-		if _, err := UpdateNode(client, d.Id(), opts); err != nil {
-			return err
+		if _, err := UpdateNode(ctx, client, d.Id(), opts); err != nil {
+			return diag.FromErr(err)
 		}
 	}
 
@@ -590,41 +596,44 @@ func resourceNodeV1Update(d *schema.ResourceData, meta any) error {
 	if (d.HasChange("manage") && d.Get("manage").(bool)) ||
 		(d.HasChange("clean") && d.Get("clean").(bool)) ||
 		(d.HasChange("inspect") && d.Get("inspect").(bool)) {
-		if err := ChangeProvisionStateToTarget(client, d.Id(), "manage", nil, nil, nil); err != nil {
-			return fmt.Errorf("could not manage: %s", err)
+		if err := ChangeProvisionStateToTarget(ctx, client, d.Id(), "manage", nil, nil, nil); err != nil {
+			return diag.FromErr(fmt.Errorf("could not manage: %s", err))
 		}
 	}
 
 	// Update power state if required
-	if targetPowerState := d.Get("target_power_state").(string); d.HasChange("target_power_state") && targetPowerState != "" {
-		if err := changePowerState(client, d, nodes.TargetPowerState(targetPowerState)); err != nil {
-			return err
+	if targetPowerState := d.Get("target_power_state").(string); d.HasChange(
+		"target_power_state",
+	) &&
+		targetPowerState != "" {
+		if diags := changePowerState(ctx, client, d, nodes.TargetPowerState(targetPowerState)); diags.HasError() {
+			return diags
 		}
 	}
 
 	// Clean node
 	if d.HasChange("clean") && d.Get("clean").(bool) {
-		if err := ChangeProvisionStateToTarget(client, d.Id(), "clean", nil, nil, nil); err != nil {
-			return fmt.Errorf("could not clean: %s", err)
+		if err := ChangeProvisionStateToTarget(ctx, client, d.Id(), "clean", nil, nil, nil); err != nil {
+			return diag.FromErr(fmt.Errorf("could not clean: %s", err))
 		}
 	}
 
 	// Inspect node
 	if d.HasChange("inspect") && d.Get("inspect").(bool) {
-		if err := ChangeProvisionStateToTarget(client, d.Id(), "inspect", nil, nil, nil); err != nil {
-			return fmt.Errorf("could not inspect: %s", err)
+		if err := ChangeProvisionStateToTarget(ctx, client, d.Id(), "inspect", nil, nil, nil); err != nil {
+			return diag.FromErr(fmt.Errorf("could not inspect: %s", err))
 		}
 	}
 
 	// Make node available
 	if d.HasChange("available") && d.Get("available").(bool) {
-		if err := ChangeProvisionStateToTarget(client, d.Id(), "provide", nil, nil, nil); err != nil {
-			return fmt.Errorf("could not make node available: %s", err)
+		if err := ChangeProvisionStateToTarget(ctx, client, d.Id(), "provide", nil, nil, nil); err != nil {
+			return diag.FromErr(fmt.Errorf("could not make node available: %s", err))
 		}
 	}
 
 	if d.HasChange("properties") || d.HasChange("root_device") {
-		properties := propertiesMerge(d, "root_device")
+		properties := propertiesMerge(ctx, d, "root_device")
 		opts := nodes.UpdateOpts{
 			nodes.UpdateOperation{
 				Op:    nodes.AddOp,
@@ -632,31 +641,31 @@ func resourceNodeV1Update(d *schema.ResourceData, meta any) error {
 				Value: properties,
 			},
 		}
-		if _, err := UpdateNode(client, d.Id(), opts); err != nil {
-			return err
+		if _, err := UpdateNode(ctx, client, d.Id(), opts); err != nil {
+			return diag.FromErr(err)
 		}
 	}
 
 	d.Partial(false)
 
-	return resourceNodeV1Read(d, meta)
+	return resourceNodeV1Read(ctx, d, meta)
 }
 
-// Delete a node from Ironic
-func resourceNodeV1Delete(d *schema.ResourceData, meta any) error {
+// Delete a node from Ironic.
+func resourceNodeV1Delete(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
 	client, err := meta.(*Clients).GetIronicClient()
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 
-	if err := ChangeProvisionStateToTarget(client, d.Id(), "deleted", nil, nil, nil); err != nil {
-		return err
+	if err := ChangeProvisionStateToTarget(ctx, client, d.Id(), "deleted", nil, nil, nil); err != nil {
+		return diag.FromErr(err)
 	}
 
-	return nodes.Delete(client, d.Id()).ExtractErr()
+	return diag.FromErr(nodes.Delete(ctx, client, d.Id()).ExtractErr())
 }
 
-func propertiesMerge(d *schema.ResourceData, key string) map[string]any {
+func propertiesMerge(ctx context.Context, d *schema.ResourceData, key string) map[string]any {
 	properties := d.Get("properties").(map[string]any)
 	properties[key] = d.Get(key).(map[string]any)
 	return properties
@@ -664,8 +673,8 @@ func propertiesMerge(d *schema.ResourceData, key string) map[string]any {
 
 // Convert terraform schema to gophercloud CreateOpts
 // TODO: Is there a better way to do this? Annotations?
-func schemaToCreateOpts(d *schema.ResourceData) *nodes.CreateOpts {
-	properties := propertiesMerge(d, "root_device")
+func schemaToCreateOpts(ctx context.Context, d *schema.ResourceData) *nodes.CreateOpts {
+	properties := propertiesMerge(ctx, d, "root_device")
 	return &nodes.CreateOpts{
 		BootInterface:       d.Get("boot_interface").(string),
 		ConductorGroup:      d.Get("conductor_group").(string),
@@ -690,24 +699,40 @@ func schemaToCreateOpts(d *schema.ResourceData) *nodes.CreateOpts {
 }
 
 // UpdateNode wraps gophercloud's update function, so we are able to retry on 409 when Ironic is busy.
-func UpdateNode(client *gophercloud.ServiceClient, uuid string, opts nodes.UpdateOpts) (node *nodes.Node, err error) {
+func UpdateNode(
+	ctx context.Context,
+	client *gophercloud.ServiceClient,
+	uuid string,
+	opts nodes.UpdateOpts,
+) (node *nodes.Node, err error) {
 	interval := 5 * time.Second
-	for retries := 0; retries < 5; retries++ {
-		node, err = nodes.Update(client, uuid, opts).Extract()
-		if _, ok := err.(gophercloud.ErrDefault409); ok {
-			log.Printf("[DEBUG] Failed to update node: ironic is busy, will try again in %s", interval.String())
-			time.Sleep(interval)
-			interval *= 2
+	for range 5 {
+		node, err = nodes.Update(ctx, client, uuid, opts).Extract()
+		if err != nil {
+			if gophercloud.ResponseCodeIs(err, http.StatusConflict) {
+				log.Printf(
+					"[DEBUG] Failed to update node: ironic is busy, will try again in %s",
+					interval.String(),
+				)
+				time.Sleep(interval)
+				interval *= 2
+				continue
+			}
 		} else {
-			return
+			break
 		}
 	}
 
 	return
 }
 
-// Call Ironic's API and change the power state of the node
-func changePowerState(client *gophercloud.ServiceClient, d *schema.ResourceData, target nodes.TargetPowerState) error {
+// Call Ironic's API and change the power state of the node.
+func changePowerState(
+	ctx context.Context,
+	client *gophercloud.ServiceClient,
+	d *schema.ResourceData,
+	target nodes.TargetPowerState,
+) diag.Diagnostics {
 	opts := nodes.PowerStateOpts{
 		Target: target,
 	}
@@ -721,13 +746,17 @@ func changePowerState(client *gophercloud.ServiceClient, d *schema.ResourceData,
 
 	interval := 5 * time.Second
 	for retries := 0; retries < 5; retries++ {
-		err := nodes.ChangePowerState(client, d.Id(), opts).ExtractErr()
-		if _, ok := err.(gophercloud.ErrDefault409); ok {
-			log.Printf("[DEBUG] Failed to change power state: ironic is busy, will try again in %s", interval.String())
-			time.Sleep(interval)
-			interval *= 2
-		} else {
-			break
+		err := nodes.ChangePowerState(ctx, client, d.Id(), opts).ExtractErr()
+		if err != nil {
+			if gophercloud.ResponseCodeIs(err, http.StatusConflict) {
+				log.Printf(
+					"[DEBUG] Failed to change power state: ironic is busy, will try again in %s",
+					interval.String(),
+				)
+				time.Sleep(interval)
+				interval *= 2
+				continue
+			}
 		}
 	}
 
@@ -735,9 +764,9 @@ func changePowerState(client *gophercloud.ServiceClient, d *schema.ResourceData,
 	checkInterval := 5
 
 	for {
-		node, err := nodes.Get(client, d.Id()).Extract()
+		node, err := nodes.Get(ctx, client, d.Id()).Extract()
 		if err != nil {
-			return err
+			return diag.FromErr(err)
 		}
 
 		if node.TargetPowerState == "" {
@@ -747,7 +776,7 @@ func changePowerState(client *gophercloud.ServiceClient, d *schema.ResourceData,
 		time.Sleep(time.Duration(checkInterval) * time.Second)
 		timeout -= checkInterval
 		if timeout <= 0 {
-			return fmt.Errorf("timed out waiting for power state change")
+			return diag.FromErr(fmt.Errorf("timed out waiting for power state change"))
 		}
 	}
 
@@ -755,7 +784,7 @@ func changePowerState(client *gophercloud.ServiceClient, d *schema.ResourceData,
 }
 
 // setRAIDConfig calls ironic's API to send request to change a Node's RAID config.
-func setRAIDConfig(client *gophercloud.ServiceClient, d *schema.ResourceData) (err error) {
+func setRAIDConfig(ctx context.Context, client *gophercloud.ServiceClient, d *schema.ResourceData) (err error) {
 	var logicalDisks []nodes.LogicalDisk
 	var targetRAID *metal3v1alpha1.RAIDConfig
 
@@ -769,7 +798,7 @@ func setRAIDConfig(client *gophercloud.ServiceClient, d *schema.ResourceData) (e
 		return
 	}
 
-	err = ironic.CheckRAIDInterface(d.Get("raid_interface").(string), targetRAID)
+	_, err = ironic.CheckRAIDInterface(d.Get("raid_interface").(string), targetRAID, nil)
 	if err != nil {
 		return
 	}
@@ -790,14 +819,17 @@ func setRAIDConfig(client *gophercloud.ServiceClient, d *schema.ResourceData) (e
 
 	// Set target for RAID configuration steps
 	return nodes.SetRAIDConfig(
+		ctx,
 		client,
 		d.Id(),
 		nodes.RAIDConfigOpts{LogicalDisks: logicalDisks},
 	).ExtractErr()
 }
 
-// buildManualCleaningSteps builds the clean steps for RAID and BIOS configuration
-func buildManualCleaningSteps(raidInterface, raidConfig, biosSetings string) (cleanSteps []nodes.CleanStep, err error) {
+// buildManualCleaningSteps builds the clean steps for RAID and BIOS configuration.
+func buildManualCleaningSteps(
+	raidInterface, raidConfig, biosSetings string,
+) (cleanSteps []nodes.CleanStep, err error) {
 	var targetRAID *metal3v1alpha1.RAIDConfig
 	var settings []map[string]string
 

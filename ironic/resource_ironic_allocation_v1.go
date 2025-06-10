@@ -1,21 +1,24 @@
 package ironic
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"time"
 
-	"github.com/gophercloud/gophercloud"
-	"github.com/gophercloud/gophercloud/openstack/baremetal/v1/allocations"
+	"github.com/gophercloud/gophercloud/v2"
+	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/v1/allocations"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
 // Schema resource definition for an Ironic allocation.
 func resourceAllocationV1() *schema.Resource {
 	return &schema.Resource{
-		Create: resourceAllocationV1Create,
-		Read:   resourceAllocationV1Read,
-		Delete: resourceAllocationV1Delete,
+		CreateContext: resourceAllocationV1Create,
+		ReadContext:   resourceAllocationV1Read,
+		DeleteContext: resourceAllocationV1Delete,
 
 		Schema: map[string]*schema.Schema{
 			"name": {
@@ -66,16 +69,17 @@ func resourceAllocationV1() *schema.Resource {
 	}
 }
 
-// Create an allocation, including driving Ironic's state machine
-func resourceAllocationV1Create(d *schema.ResourceData, meta any) error {
-	client, err := meta.(*Clients).GetIronicClient()
+// Create an allocation, including driving Ironic's state machine.
+func resourceAllocationV1Create(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
+	client, err := GetIronicClient(ctx, meta)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 
-	result, err := allocations.Create(client, allocationSchemaToCreateOpts(d)).Extract()
+	result, err := allocations.Create(ctx, client, allocationSchemaToCreateOpts(ctx, d)).
+		Extract()
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 
 	d.SetId(result.UUID)
@@ -85,9 +89,8 @@ func resourceAllocationV1Create(d *schema.ResourceData, meta any) error {
 	checkInterval := 2 * time.Second
 
 	for {
-		err = resourceAllocationV1Read(d, meta)
-		if err != nil {
-			return err
+		if diagErr := resourceAllocationV1Read(ctx, d, meta); diagErr.HasError() {
+			return diagErr
 		}
 		state := d.Get("state").(string)
 		log.Printf("[DEBUG] Requested allocation %s; current state is '%s'\n", d.Id(), state)
@@ -97,78 +100,83 @@ func resourceAllocationV1Create(d *schema.ResourceData, meta any) error {
 			checkInterval += 2
 			timeout -= checkInterval
 			if timeout < 0 {
-				return fmt.Errorf("timed out waiting for allocation")
+				return diag.FromErr(fmt.Errorf("timed out waiting for allocation"))
 			}
 		case "error":
 			err := d.Get("last_error").(string)
-			_ = resourceAllocationV1Delete(d, meta)
+			_ = resourceAllocationV1Delete(ctx, d, meta)
 			d.SetId("")
-			return fmt.Errorf("error creating resource: %s", err)
+			return diag.FromErr(fmt.Errorf("error creating resource: %s", err))
 		default:
 			return nil
 		}
 	}
 }
 
-// Read the allocation's data from Ironic
-func resourceAllocationV1Read(d *schema.ResourceData, meta any) error {
-	client, err := meta.(*Clients).GetIronicClient()
+// Read the allocation's data from Ironic.
+func resourceAllocationV1Read(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
+	client, err := GetIronicClient(ctx, meta)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 
-	result, err := allocations.Get(client, d.Id()).Extract()
+	result, err := allocations.Get(ctx, client, d.Id()).Extract()
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 
 	err = d.Set("name", result.Name)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("resource_class", result.ResourceClass)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("candidate_nodes", result.CandidateNodes)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("traits", result.Traits)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("extra", result.Extra)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("node_uuid", result.NodeUUID)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("state", result.State)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
-	return d.Set("last_error", result.LastError)
+	return diag.FromErr(d.Set("last_error", result.LastError))
 }
 
-// Delete an allocation from Ironic if it exists
-func resourceAllocationV1Delete(d *schema.ResourceData, meta any) error {
-	client, err := meta.(*Clients).GetIronicClient()
+// Delete an allocation from Ironic if it exists.
+func resourceAllocationV1Delete(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
+	client, err := GetIronicClient(ctx, meta)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 
-	_, err = allocations.Get(client, d.Id()).Extract()
-	if _, ok := err.(gophercloud.ErrDefault404); ok {
-		return nil
+	_, err = allocations.Get(ctx, client, d.Id()).Extract()
+	if err != nil {
+		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
+			return nil
+		}
 	}
 
-	return allocations.Delete(client, d.Id()).ExtractErr()
+	if err := allocations.Delete(ctx, client, d.Id()).ExtractErr(); err != nil {
+		return diag.FromErr(fmt.Errorf("error deleting allocation %s: %w", d.Id(), err))
+	}
+	return nil
 }
 
-func allocationSchemaToCreateOpts(d *schema.ResourceData) *allocations.CreateOpts {
+func allocationSchemaToCreateOpts(ctx context.Context, d *schema.ResourceData) *allocations.CreateOpts {
 	candidateNodesRaw := d.Get("candidate_nodes").([]any)
 	traitsRaw := d.Get("traits").([]any)
 	extraRaw := d.Get("extra").(map[string]any)

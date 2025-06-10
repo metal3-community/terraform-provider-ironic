@@ -1,17 +1,19 @@
 package ironic
 
 import (
+	"context"
 	"fmt"
 	"time"
 
-	"github.com/gophercloud/gophercloud/openstack/baremetalintrospection/v1/introspection"
+	"github.com/gophercloud/gophercloud/v2/openstack/baremetalintrospection/v1/introspection"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
 // Schema resource for an introspection data source, that has some selected details about the node exposed.
 func dataSourceIronicIntrospection() *schema.Resource {
 	return &schema.Resource{
-		Read: dataSourceIronicIntrospectionRead,
+		ReadContext: dataSourceIronicIntrospectionRead,
 		Schema: map[string]*schema.Schema{
 			"uuid": {
 				Type:     schema.TypeString,
@@ -67,44 +69,46 @@ func dataSourceIronicIntrospection() *schema.Resource {
 	}
 }
 
-func dataSourceIronicIntrospectionRead(d *schema.ResourceData, meta any) error {
+func dataSourceIronicIntrospectionRead(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
 	client, err := meta.(*Clients).GetInspectorClient()
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 
 	uuid := d.Get("uuid").(string)
 
-	status, err := introspection.GetIntrospectionStatus(client, uuid).Extract()
+	status, err := introspection.GetIntrospectionStatus(ctx, client, uuid).
+		Extract()
 	if err != nil {
-		return fmt.Errorf("could not get introspection status: %s", err.Error())
+		return diag.FromErr(fmt.Errorf("could not get introspection status: %s", err.Error()))
 	}
 
 	err = d.Set("finished", status.Finished)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("finished_at", status.FinishedAt.Format("2006-01-02T15:04:05"))
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("started_at", status.StartedAt.Format("2006-01-02T15:04:05"))
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("error", status.Error)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 	err = d.Set("state", status.State)
 	if err != nil {
-		return err
+		return diag.FromErr(err)
 	}
 
 	if status.Finished {
-		data, err := introspection.GetIntrospectionData(client, uuid).Extract()
+		data, err := introspection.GetIntrospectionData(ctx, client, uuid).
+			Extract()
 		if err != nil {
-			return fmt.Errorf("could not get introspection data: %s", err.Error())
+			return diag.FromErr(fmt.Errorf("could not get introspection data: %s", err.Error()))
 		}
 
 		// Network interface data
@@ -118,23 +122,23 @@ func dataSourceIronicIntrospectionRead(d *schema.ResourceData, meta any) error {
 		}
 		err = d.Set("interfaces", interfaces)
 		if err != nil {
-			return err
+			return diag.FromErr(err)
 		}
 
 		// CPU data
 		err = d.Set("cpu_arch", data.CPUArch)
 		if err != nil {
-			return err
+			return diag.FromErr(err)
 		}
 		err = d.Set("cpu_count", data.CPUs)
 		if err != nil {
-			return err
+			return diag.FromErr(err)
 		}
 
 		// Memory info
 		err = d.Set("memory_mb", data.MemoryMB)
 		if err != nil {
-			return err
+			return diag.FromErr(err)
 		}
 	}
 

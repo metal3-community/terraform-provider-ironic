@@ -9,18 +9,18 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gophercloud/gophercloud"
-	"github.com/gophercloud/gophercloud/openstack/baremetal/httpbasic"
-	"github.com/gophercloud/gophercloud/openstack/baremetal/noauth"
-	"github.com/gophercloud/gophercloud/openstack/baremetal/v1/drivers"
-	httpbasicintrospection "github.com/gophercloud/gophercloud/openstack/baremetalintrospection/httpbasic"
-	noauthintrospection "github.com/gophercloud/gophercloud/openstack/baremetalintrospection/noauth"
-	"github.com/gophercloud/gophercloud/pagination"
+	"github.com/gophercloud/gophercloud/v2"
+	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/httpbasic"
+	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/noauth"
+	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/v1/drivers"
+	httpbasicintrospection "github.com/gophercloud/gophercloud/v2/openstack/baremetalintrospection/httpbasic"
+	noauthintrospection "github.com/gophercloud/gophercloud/v2/openstack/baremetalintrospection/noauth"
+	"github.com/gophercloud/gophercloud/v2/pagination"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
 )
 
-// Clients stores the client connection information for Ironic and Inspector
+// Clients stores the client connection information for Ironic and Inspector.
 type Clients struct {
 	ironic    *gophercloud.ServiceClient
 	inspector *gophercloud.ServiceClient
@@ -141,7 +141,24 @@ func (c *Clients) GetInspectorClient() (*gophercloud.ServiceClient, error) {
 	return c.inspector, ctx.Err()
 }
 
-// Provider Ironic
+func GetIronicClient(ctx context.Context, meta any) (*gophercloud.ServiceClient, error) {
+	client, ok := meta.(*Clients)
+	if !ok {
+		return nil, fmt.Errorf("expected meta to be of type *Clients, got %T", meta)
+	}
+
+	ironicClient, err := client.GetIronicClient()
+	if err != nil {
+		return nil, fmt.Errorf("could not get Ironic client: %w", err)
+	}
+
+	// Ensure the API is available before returning the client.
+	waitForAPI(ctx, ironicClient)
+
+	return ironicClient, nil
+}
+
+// Provider Ironic.
 func Provider() *schema.Provider {
 	return &schema.Provider{
 		Schema: map[string]*schema.Schema{
@@ -208,6 +225,7 @@ func Provider() *schema.Provider {
 		ResourcesMap: map[string]*schema.Resource{
 			"ironic_node_v1":       resourceNodeV1(),
 			"ironic_port_v1":       resourcePortV1(),
+			"ironic_portgroup_v1":  resourcePortGroupV1(),
 			"ironic_allocation_v1": resourceAllocationV1(),
 			"ironic_deployment":    resourceDeployment(),
 		},
@@ -234,7 +252,7 @@ func init() {
 	}
 }
 
-// Creates a noauth Ironic client
+// Creates a noauth Ironic client.
 func configureProvider(schema *schema.ResourceData) (any, error) {
 	var clients Clients
 
@@ -256,7 +274,6 @@ func configureProvider(schema *schema.ResourceData) (any, error) {
 			IronicUser:         ironicUser,
 			IronicUserPassword: ironicPassword,
 		})
-
 		if err != nil {
 			return nil, err
 		}
@@ -270,12 +287,13 @@ func configureProvider(schema *schema.ResourceData) (any, error) {
 			inspectorPassword := schema.Get("inspector_password").(string)
 			log.Printf("[DEBUG] Inspector endpoint is %s", inspectorURL)
 
-			inspector, err := httpbasicintrospection.NewBareMetalIntrospectionHTTPBasic(httpbasicintrospection.EndpointOpts{
-				IronicInspectorEndpoint:     inspectorURL,
-				IronicInspectorUser:         inspectorUser,
-				IronicInspectorUserPassword: inspectorPassword,
-			})
-
+			inspector, err := httpbasicintrospection.NewBareMetalIntrospectionHTTPBasic(
+				httpbasicintrospection.EndpointOpts{
+					IronicInspectorEndpoint:     inspectorURL,
+					IronicInspectorUser:         inspectorUser,
+					IronicInspectorUserPassword: inspectorPassword,
+				},
+			)
 			if err != nil {
 				return nil, err
 			}
@@ -356,7 +374,7 @@ func waitForConductor(ctx context.Context, client *gophercloud.ServiceClient) {
 
 			err := drivers.ListDrivers(client, drivers.ListDriversOpts{
 				Detail: false,
-			}).EachPage(func(page pagination.Page) (bool, error) {
+			}).EachPage(context.Background(), func(ctx context.Context, page pagination.Page) (bool, error) {
 				actual, err := drivers.ExtractDrivers(page)
 				if err != nil {
 					return false, err

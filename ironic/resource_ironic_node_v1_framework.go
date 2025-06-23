@@ -50,9 +50,9 @@ type nodeV1ResourceModel struct {
 	Inspect               types.Bool        `tfsdk:"inspect"`
 	Available             types.Bool        `tfsdk:"available"`
 	Manage                types.Bool        `tfsdk:"manage"`
-	Properties            types.Map         `tfsdk:"properties"`
+	Properties            types.Dynamic     `tfsdk:"properties"`
 	DriverInfo            types.Dynamic     `tfsdk:"driver_info"`
-	InstanceInfo          types.Map         `tfsdk:"instance_info"`
+	InstanceInfo          types.Dynamic     `tfsdk:"instance_info"`
 	InstanceUUID          types.String      `tfsdk:"instance_uuid"`
 	ResourceClass         types.String      `tfsdk:"resource_class"`
 	Ports                 []nodeV1PortModel `tfsdk:"ports"`
@@ -61,7 +61,7 @@ type nodeV1ResourceModel struct {
 	TargetProvisionState  types.String      `tfsdk:"target_provision_state"`
 	TargetPowerState      types.String      `tfsdk:"target_power_state"`
 	LastError             types.String      `tfsdk:"last_error"`
-	ExtraData             types.Map         `tfsdk:"extra"`
+	ExtraData             types.Dynamic     `tfsdk:"extra"`
 	Owner                 types.String      `tfsdk:"owner"`
 	Lessee                types.String      `tfsdk:"lessee"`
 	Conductor             types.String      `tfsdk:"conductor"`
@@ -71,8 +71,8 @@ type nodeV1ResourceModel struct {
 	Created               types.String      `tfsdk:"created_at"`
 	Updated               types.String      `tfsdk:"updated_at"`
 	AvailableCapabilities types.List        `tfsdk:"available_capabilities"`
-	CleanStep             types.Map         `tfsdk:"clean_step"`
-	DeployStep            types.Map         `tfsdk:"deploy_step"`
+	CleanStep             types.Dynamic     `tfsdk:"clean_step"`
+	DeployStep            types.Dynamic     `tfsdk:"deploy_step"`
 	Fault                 types.String      `tfsdk:"fault"`
 	BIOSInterface         types.String      `tfsdk:"bios_interface"`
 	FirmwareInterface     types.String      `tfsdk:"firmware_interface"`
@@ -195,9 +195,8 @@ func (r *nodeV1Resource) Schema(
 				Optional:            true,
 				Computed:            true,
 			},
-			"properties": schema.MapAttribute{
+			"properties": schema.DynamicAttribute{
 				MarkdownDescription: "The properties of the node.",
-				ElementType:         types.StringType,
 				Optional:            true,
 			},
 			"driver_info": schema.DynamicAttribute{
@@ -205,9 +204,8 @@ func (r *nodeV1Resource) Schema(
 				Optional:            true,
 				Sensitive:           true,
 			},
-			"instance_info": schema.MapAttribute{
+			"instance_info": schema.DynamicAttribute{
 				MarkdownDescription: "The instance info of the node.",
-				ElementType:         types.StringType,
 				Optional:            true,
 				Sensitive:           true,
 			},
@@ -241,9 +239,8 @@ func (r *nodeV1Resource) Schema(
 				MarkdownDescription: "The last error message for the node.",
 				Computed:            true,
 			},
-			"extra": schema.MapAttribute{
+			"extra": schema.DynamicAttribute{
 				MarkdownDescription: "Extra metadata for the node.",
-				ElementType:         types.StringType,
 				Optional:            true,
 			},
 			"owner": schema.StringAttribute{
@@ -287,14 +284,12 @@ func (r *nodeV1Resource) Schema(
 				ElementType:         types.StringType,
 				Computed:            true,
 			},
-			"clean_step": schema.MapAttribute{
+			"clean_step": schema.DynamicAttribute{
 				MarkdownDescription: "The current clean step for the node.",
-				ElementType:         types.StringType,
 				Computed:            true,
 			},
-			"deploy_step": schema.MapAttribute{
+			"deploy_step": schema.DynamicAttribute{
 				MarkdownDescription: "The current deploy step for the node.",
-				ElementType:         types.StringType,
 				Computed:            true,
 			},
 			"fault": schema.StringAttribute{
@@ -450,13 +445,15 @@ func (r *nodeV1Resource) Create(
 
 	// Handle maps
 	if !plan.Properties.IsNull() && !plan.Properties.IsUnknown() {
-		properties := make(map[string]any)
-		diags = plan.Properties.ElementsAs(ctx, &properties, false)
-		resp.Diagnostics.Append(diags...)
-		if resp.Diagnostics.HasError() {
-			return
+		if properties, err := util.DynamicToMap(ctx, plan.Properties); err != nil {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("driver_info"),
+				"Error Converting Driver Info",
+				fmt.Sprintf("Could not convert driver_info to map: %s", err),
+			)
+		} else {
+			createOpts.Properties = properties
 		}
-		createOpts.Properties = properties
 	}
 
 	if !plan.DriverInfo.IsNull() && !plan.DriverInfo.IsUnknown() {
@@ -472,13 +469,15 @@ func (r *nodeV1Resource) Create(
 	}
 
 	if !plan.ExtraData.IsNull() && !plan.ExtraData.IsUnknown() {
-		extra := make(map[string]any)
-		diags = plan.ExtraData.ElementsAs(ctx, &extra, false)
-		resp.Diagnostics.Append(diags...)
-		if resp.Diagnostics.HasError() {
-			return
+		if extra, err := util.DynamicToMap(ctx, plan.Properties); err != nil {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("extra"),
+				"Error Converting Extra Data",
+				fmt.Sprintf("Could not convert extra to map: %s", err),
+			)
+		} else {
+			createOpts.Extra = extra
 		}
-		createOpts.Extra = extra
 	}
 
 	// Handle other optional fields supported by CreateOpts
@@ -754,9 +753,13 @@ func (r *nodeV1Resource) readNodeData(
 
 	// Handle map fields - this is simplified, you may need more complex handling
 	if node.Properties != nil {
-		properties, diags := types.MapValueFrom(ctx, types.StringType, node.Properties)
-		diagnostics.Append(diags...)
-		if !diagnostics.HasError() {
+		if properties, err := util.MapToDynamic(ctx, node.Properties); err != nil {
+			diagnostics.AddAttributeError(
+				path.Root("properties"),
+				"Error Converting Properties",
+				fmt.Sprintf("Could not convert properties to dynamic: %s", err),
+			)
+		} else {
 			model.Properties = properties
 		}
 	}
@@ -774,17 +777,26 @@ func (r *nodeV1Resource) readNodeData(
 	}
 
 	if node.InstanceInfo != nil {
-		instanceInfo, diags := types.MapValueFrom(ctx, types.StringType, node.InstanceInfo)
-		diagnostics.Append(diags...)
-		if !diagnostics.HasError() {
+		instanceInfo, err := util.MapToDynamic(ctx, node.InstanceInfo)
+		if err != nil {
+			diagnostics.AddAttributeError(
+				path.Root("instance_info"),
+				"Error Converting Instance Info",
+				fmt.Sprintf("Could not convert instance_info to dynamic: %s", err),
+			)
+		} else {
 			model.InstanceInfo = instanceInfo
 		}
 	}
 
 	if node.Extra != nil {
-		extra, diags := types.MapValueFrom(ctx, types.StringType, node.Extra)
-		diagnostics.Append(diags...)
-		if !diagnostics.HasError() {
+		if extra, err := util.MapToDynamic(ctx, node.Extra); err != nil {
+			diagnostics.AddAttributeError(
+				path.Root("extra"),
+				"Error Converting Extra Data",
+				fmt.Sprintf("Could not convert extra to dynamic: %s", err),
+			)
+		} else {
 			model.ExtraData = extra
 		}
 	}

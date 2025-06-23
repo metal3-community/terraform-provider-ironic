@@ -900,6 +900,8 @@ func (r *nodeV1Resource) readNodeData(
 		} else {
 			model.Properties = properties
 		}
+	} else {
+		model.Properties = types.DynamicNull()
 	}
 
 	if node.DriverInfo != nil {
@@ -912,6 +914,8 @@ func (r *nodeV1Resource) readNodeData(
 		} else {
 			model.DriverInfo = driverInfo
 		}
+	} else {
+		model.DriverInfo = types.DynamicNull()
 	}
 
 	if node.InstanceInfo != nil {
@@ -925,6 +929,8 @@ func (r *nodeV1Resource) readNodeData(
 		} else {
 			model.InstanceInfo = instanceInfo
 		}
+	} else {
+		model.InstanceInfo = types.DynamicNull()
 	}
 
 	if len(node.Extra) > 0 {
@@ -937,6 +943,8 @@ func (r *nodeV1Resource) readNodeData(
 		} else {
 			model.ExtraData = extra
 		}
+	} else {
+		model.ExtraData = types.DynamicNull()
 	}
 
 	if len(node.CleanStep) > 0 {
@@ -949,6 +957,8 @@ func (r *nodeV1Resource) readNodeData(
 		} else {
 			model.CleanStep = cleanStep
 		}
+	} else {
+		model.CleanStep = types.DynamicNull()
 	}
 
 	// Handle other complex fields as needed...

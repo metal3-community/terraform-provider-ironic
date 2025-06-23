@@ -424,7 +424,11 @@ func resourceNodeV1Read(ctx context.Context, d *schema.ResourceData, meta any) d
 }
 
 // Import the node's data from Ironic.
-func resourceNodeV1Import(ctx context.Context, d *schema.ResourceData, meta any) ([]*schema.ResourceData, error) {
+func resourceNodeV1Import(
+	ctx context.Context,
+	d *schema.ResourceData,
+	meta any,
+) ([]*schema.ResourceData, error) {
 	client, err := meta.(*Clients).GetIronicClient()
 	if err != nil {
 		return []*schema.ResourceData{d}, err
@@ -784,7 +788,11 @@ func changePowerState(
 }
 
 // setRAIDConfig calls ironic's API to send request to change a Node's RAID config.
-func setRAIDConfig(ctx context.Context, client *gophercloud.ServiceClient, d *schema.ResourceData) (err error) {
+func setRAIDConfig(
+	ctx context.Context,
+	client *gophercloud.ServiceClient,
+	d *schema.ResourceData,
+) (err error) {
 	var logicalDisks []nodes.LogicalDisk
 	var targetRAID *metal3v1alpha1.RAIDConfig
 

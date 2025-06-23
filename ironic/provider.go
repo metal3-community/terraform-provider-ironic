@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -166,19 +167,16 @@ func Provider() *schema.Provider {
 			"url": {
 				Type:        schema.TypeString,
 				Required:    true,
-				DefaultFunc: schema.EnvDefaultFunc("IRONIC_ENDPOINT", ""),
 				Description: descriptions["url"],
 			},
 			"inspector": {
 				Type:        schema.TypeString,
 				Optional:    true,
-				DefaultFunc: schema.EnvDefaultFunc("IRONIC_INSPECTOR_ENDPOINT", ""),
 				Description: descriptions["inspector"],
 			},
 			"microversion": {
 				Type:        schema.TypeString,
 				Required:    true,
-				DefaultFunc: schema.EnvDefaultFunc("IRONIC_MICROVERSION", "1.52"),
 				Description: descriptions["microversion"],
 			},
 			"timeout": {
@@ -190,7 +188,6 @@ func Provider() *schema.Provider {
 			"auth_strategy": {
 				Type:        schema.TypeString,
 				Optional:    true,
-				DefaultFunc: schema.EnvDefaultFunc("IRONIC_AUTH_STRATEGY", "noauth"),
 				Description: descriptions["auth_strategy"],
 				ValidateFunc: validation.StringInSlice([]string{
 					"noauth", "http_basic",
@@ -199,28 +196,24 @@ func Provider() *schema.Provider {
 			"ironic_username": {
 				Type:        schema.TypeString,
 				Optional:    true,
-				DefaultFunc: schema.EnvDefaultFunc("IRONIC_HTTP_BASIC_USERNAME", ""),
 				Description: descriptions["ironic_username"],
 			},
 			"ironic_password": {
 				Type:        schema.TypeString,
 				Optional:    true,
 				Sensitive:   true,
-				DefaultFunc: schema.EnvDefaultFunc("IRONIC_HTTP_BASIC_PASSWORD", ""),
 				Description: descriptions["ironic_password"],
 			},
 			"inspector_username": {
 				Type:        schema.TypeString,
 				Optional:    true,
-				DefaultFunc: schema.EnvDefaultFunc("INSPECTOR_HTTP_BASIC_USERNAME", ""),
 				Description: descriptions["inspector_username"],
 			},
 			"inspector_password": {
 				Type:        schema.TypeString,
 				Optional:    true,
 				Sensitive:   true,
-				DefaultFunc: schema.EnvDefaultFunc("INSPECTOR_HTTP_BASIC_PASSWORD", ""),
-				Description: descriptions["inspector_username"],
+				Description: descriptions["inspector_password"],
 			},
 		},
 		ResourcesMap: map[string]*schema.Resource{
@@ -258,7 +251,13 @@ func configureProvider(ctx context.Context, schema *schema.ResourceData) (any, d
 	var clients Clients
 	var diags diag.Diagnostics
 
+	// Get URL with environment variable fallback
 	url := schema.Get("url").(string)
+	if url == "" {
+		if v := os.Getenv("IRONIC_ENDPOINT"); v != "" {
+			url = v
+		}
+	}
 	if url == "" {
 		diags = append(diags, diag.Diagnostic{
 			Severity: diag.Error,
@@ -270,13 +269,44 @@ func configureProvider(ctx context.Context, schema *schema.ResourceData) (any, d
 	}
 	log.Printf("[DEBUG] Ironic endpoint is %s", url)
 
+	// Get microversion with environment variable fallback and default
+	microversion := schema.Get("microversion").(string)
+	if microversion == "" {
+		if v := os.Getenv("IRONIC_MICROVERSION"); v != "" {
+			microversion = v
+		} else {
+			microversion = "1.52"
+		}
+	}
+
+	// Get auth strategy with environment variable fallback and default
 	authStrategy := schema.Get("auth_strategy").(string)
+	if authStrategy == "" {
+		if v := os.Getenv("IRONIC_AUTH_STRATEGY"); v != "" {
+			authStrategy = v
+		} else {
+			authStrategy = "noauth"
+		}
+	}
 
 	if authStrategy == "http_basic" {
 		log.Printf("[DEBUG] Using http_basic auth_strategy")
 
+		// Get Ironic credentials with environment variable fallback
 		ironicUser := schema.Get("ironic_username").(string)
+		if ironicUser == "" {
+			if v := os.Getenv("IRONIC_HTTP_BASIC_USERNAME"); v != "" {
+				ironicUser = v
+			}
+		}
+
 		ironicPassword := schema.Get("ironic_password").(string)
+		if ironicPassword == "" {
+			if v := os.Getenv("IRONIC_HTTP_BASIC_PASSWORD"); v != "" {
+				ironicPassword = v
+			}
+		}
+
 		ironic, err := httpbasic.NewBareMetalHTTPBasic(httpbasic.EndpointOpts{
 			IronicEndpoint:     url,
 			IronicUser:         ironicUser,
@@ -286,13 +316,33 @@ func configureProvider(ctx context.Context, schema *schema.ResourceData) (any, d
 			return nil, diag.Errorf("could not configure Ironic endpoint: %s", err.Error())
 		}
 
-		ironic.Microversion = schema.Get("microversion").(string)
+		ironic.Microversion = microversion
 		clients.ironic = ironic
 
+		// Get inspector URL with environment variable fallback
 		inspectorURL := schema.Get("inspector").(string)
+		if inspectorURL == "" {
+			if v := os.Getenv("IRONIC_INSPECTOR_ENDPOINT"); v != "" {
+				inspectorURL = v
+			}
+		}
+
 		if inspectorURL != "" {
+			// Get inspector credentials with environment variable fallback
 			inspectorUser := schema.Get("inspector_username").(string)
+			if inspectorUser == "" {
+				if v := os.Getenv("INSPECTOR_HTTP_BASIC_USERNAME"); v != "" {
+					inspectorUser = v
+				}
+			}
+
 			inspectorPassword := schema.Get("inspector_password").(string)
+			if inspectorPassword == "" {
+				if v := os.Getenv("INSPECTOR_HTTP_BASIC_PASSWORD"); v != "" {
+					inspectorPassword = v
+				}
+			}
+
 			log.Printf("[DEBUG] Inspector endpoint is %s", inspectorURL)
 
 			inspector, err := httpbasicintrospection.NewBareMetalIntrospectionHTTPBasic(
@@ -316,10 +366,17 @@ func configureProvider(ctx context.Context, schema *schema.ResourceData) (any, d
 		if err != nil {
 			return nil, diag.FromErr(err)
 		}
-		ironic.Microversion = schema.Get("microversion").(string)
+		ironic.Microversion = microversion
 		clients.ironic = ironic
 
+		// Get inspector URL with environment variable fallback
 		inspectorURL := schema.Get("inspector").(string)
+		if inspectorURL == "" {
+			if v := os.Getenv("IRONIC_INSPECTOR_ENDPOINT"); v != "" {
+				inspectorURL = v
+			}
+		}
+
 		if inspectorURL != "" {
 			log.Printf("[DEBUG] Inspector endpoint is %s", inspectorURL)
 			inspector, err := noauthintrospection.NewBareMetalIntrospectionNoAuth(noauthintrospection.EndpointOpts{

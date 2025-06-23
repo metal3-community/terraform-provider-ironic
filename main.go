@@ -42,6 +42,14 @@ func main() {
 		context.Background(),
 		provider.Provider().GRPCProvider,
 	)
+	if err != nil {
+		tflog.Error(ctx, "Failed to upgrade SDK provider to protocol version 6",
+			map[string]any{
+				"error": err,
+			},
+		)
+		os.Exit(1)
+	}
 
 	providers := []func() tfprotov6.ProviderServer{
 		func() tfprotov6.ProviderServer {

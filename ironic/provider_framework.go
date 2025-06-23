@@ -2,8 +2,14 @@ package ironic
 
 import (
 	"context"
+	"fmt"
+	"log"
 	"os"
 
+	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/httpbasic"
+	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/noauth"
+	httpbasicintrospection "github.com/gophercloud/gophercloud/v2/openstack/baremetalintrospection/httpbasic"
+	noauthintrospection "github.com/gophercloud/gophercloud/v2/openstack/baremetalintrospection/noauth"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
@@ -13,12 +19,23 @@ import (
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
+// Shared descriptions for provider attributes to ensure consistency.
+var frameworkDescriptions = map[string]string{
+	"url":                "The authentication endpoint for Ironic",
+	"inspector":          "The endpoint for Ironic inspector",
+	"microversion":       "The microversion to use for Ironic",
+	"timeout":            "Wait at least the specified number of seconds for the API to become available",
+	"auth_strategy":      "Determine the strategy to use for authentication with Ironic services, Possible values: noauth, http_basic. Defaults to noauth.",
+	"ironic_username":    "Username to be used by Ironic when using `http_basic` authentication",
+	"ironic_password":    "Password to be used by Ironic when using `http_basic` authentication",
+	"inspector_username": "Username to be used by Ironic Inspector when using `http_basic` authentication",
+	"inspector_password": "Password to be used by Ironic Inspector when using `http_basic` authentication",
+}
+
 // frameworkProvider is a type that implements the terraform-plugin-framework
 // provider.Provider interface. Someday, this will probably encompass the entire
 // behavior of the ironic provider. Today, it is a small but growing subset.
-type frameworkProvider struct {
-	defaultSiteName *string
-}
+type frameworkProvider struct{}
 
 var (
 	_ provider.Provider                       = &frameworkProvider{}
@@ -30,12 +47,12 @@ var (
 type FrameworkProviderConfig struct {
 	Url               types.String `tfsdk:"url"`
 	Inspector         types.String `tfsdk:"inspector"`
-	MicroVersion      types.String `tfsdk:"microversion"`
+	Microversion      types.String `tfsdk:"microversion"`
 	Timeout           types.Int64  `tfsdk:"timeout"`
 	AuthStrategy      types.String `tfsdk:"auth_strategy"`
-	User              types.String `tfsdk:"ironic_username"`
-	Password          types.String `tfsdk:"ironic_password"`
-	InspectorUser     types.String `tfsdk:"inspector_username"`
+	IronicUsername    types.String `tfsdk:"ironic_username"`
+	IronicPassword    types.String `tfsdk:"ironic_password"`
+	InspectorUsername types.String `tfsdk:"inspector_username"`
 	InspectorPassword types.String `tfsdk:"inspector_password"`
 }
 
@@ -43,12 +60,6 @@ type FrameworkProviderConfig struct {
 // the ironic provider implemented via the terraform-plugin-framework.
 func NewFrameworkProvider() provider.Provider {
 	return &frameworkProvider{}
-}
-
-// NewFrameworkProviderWithDefaultOrg is a helper function for
-// initializing a framework provider with a default site name.
-func NewFrameworkProviderWithDefaultSite(defaultSiteName string) provider.Provider {
-	return &frameworkProvider{defaultSiteName: &defaultSiteName}
 }
 
 // Metadata (a Provider interface function) lets the provider identify itself.
@@ -72,48 +83,48 @@ func (p *frameworkProvider) Schema(
 	res.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"url": schema.StringAttribute{
-				MarkdownDescription: descriptions["url"],
-				Required:            true,
+				Required:    true,
+				Description: frameworkDescriptions["url"],
 			},
 			"inspector": schema.StringAttribute{
-				MarkdownDescription: descriptions["inspector"],
-				Optional:            true,
+				Optional:    true,
+				Description: frameworkDescriptions["inspector"],
 			},
 			"microversion": schema.StringAttribute{
-				MarkdownDescription: descriptions["microversion"],
-				Optional:            true,
+				Required:    true,
+				Description: frameworkDescriptions["microversion"],
 			},
 			"timeout": schema.Int64Attribute{
-				MarkdownDescription: descriptions["timeout"],
-				Optional:            true,
+				Optional:    true,
+				Description: frameworkDescriptions["timeout"],
 			},
 			"auth_strategy": schema.StringAttribute{
-				MarkdownDescription: descriptions["auth_strategy"],
-				Optional:            true,
+				Optional:    true,
+				Description: frameworkDescriptions["auth_strategy"],
 			},
 			"ironic_username": schema.StringAttribute{
-				MarkdownDescription: descriptions["ironic_username"],
-				Optional:            true,
+				Optional:    true,
+				Description: frameworkDescriptions["ironic_username"],
 			},
 			"ironic_password": schema.StringAttribute{
-				MarkdownDescription: descriptions["ironic_password"],
-				Optional:            true,
-				Sensitive:           true,
+				Optional:    true,
+				Sensitive:   true,
+				Description: frameworkDescriptions["ironic_password"],
 			},
 			"inspector_username": schema.StringAttribute{
-				MarkdownDescription: descriptions["inspector_username"],
-				Optional:            true,
+				Optional:    true,
+				Description: frameworkDescriptions["inspector_username"],
 			},
 			"inspector_password": schema.StringAttribute{
-				MarkdownDescription: descriptions["inspector_password"],
-				Optional:            true,
-				Sensitive:           true,
+				Optional:    true,
+				Sensitive:   true,
+				Description: frameworkDescriptions["inspector_password"],
 			},
 		},
 	}
 }
 
-// Configure (a Provider interface function) sets up the HCP Terraform client per the
+// Configure (a Provider interface function) sets up the Ironic client per the
 // specified provider configuration block and env vars.
 func (p *frameworkProvider) Configure(
 	ctx context.Context,
@@ -129,61 +140,166 @@ func (p *frameworkProvider) Configure(
 		return
 	}
 
-	tflog.Info(ctx, "Configuring Synology provider")
+	tflog.Info(ctx, "Configuring Ironic provider")
 
-	res.Diagnostics.Append(req.Config.Get(ctx, &data)...)
-	if res.Diagnostics.HasError() {
+	// Get URL with environment variable fallback
+	url := data.Url.ValueString()
+	if url == "" {
+		if v := os.Getenv("IRONIC_ENDPOINT"); v != "" {
+			url = v
+		}
+	}
+	if url == "" {
+		res.Diagnostics.AddError(
+			"Missing Ironic URL",
+			"The 'url' field is required for the Ironic provider.",
+		)
 		return
 	}
-	endpoint := data.Url.ValueString()
-	if endpoint == "" {
-		if v := os.Getenv("IRONIC_ENDPOINT"); v != "" {
-			endpoint = v
-		}
-	}
-	inspector := data.Inspector.ValueString()
-	if inspector == "" {
-		if v := os.Getenv("IRONIC_INSPECTOR_ENDPOINT"); v != "" {
-			inspector = v
-		}
-	}
-	user := data.User.ValueString()
-	if user == "" {
-		if v := os.Getenv("IRONIC_HTTP_BASIC_USERNAME"); v != "" {
-			user = v
-		}
-	}
-	pass := data.Password.ValueString()
-	if pass == "" {
-		if v := os.Getenv("IRONIC_HTTP_BASIC_PASSWORD"); v != "" {
-			pass = v
-		}
-	}
-	authStrategy := data.AuthStrategy.ValueString()
-	if !authStrategy {
-		if v := os.Getenv("IRONIC_INSECURE"); v != "" {
-			authStrategy == "http_basic" {
+	log.Printf("[DEBUG] Ironic endpoint is %s", url)
 
+	// Get microversion with environment variable fallback and default
+	microversion := data.Microversion.ValueString()
+	if microversion == "" {
+		if v := os.Getenv("IRONIC_MICROVERSION"); v != "" {
+			microversion = v
+		} else {
+			microversion = "1.52"
+		}
+	}
+
+	// Get auth strategy with environment variable fallback and default
+	authStrategy := data.AuthStrategy.ValueString()
+	if authStrategy == "" {
+		if v := os.Getenv("IRONIC_AUTH_STRATEGY"); v != "" {
+			authStrategy = v
+		} else {
+			authStrategy = "noauth"
+		}
+	}
+
+	if authStrategy == "http_basic" {
+		log.Printf("[DEBUG] Using http_basic auth_strategy")
+
+		// Get Ironic credentials with environment variable fallback
+		ironicUser := data.IronicUsername.ValueString()
+		if ironicUser == "" {
+			if v := os.Getenv("IRONIC_HTTP_BASIC_USERNAME"); v != "" {
+				ironicUser = v
 			}
 		}
-	}
-	site := data.Site.ValueString()
-	if site == "" {
-		if v := os.Getenv("IRONIC_SITE"); v != "" {
-			site = v
+
+		ironicPassword := data.IronicPassword.ValueString()
+		if ironicPassword == "" {
+			if v := os.Getenv("IRONIC_HTTP_BASIC_PASSWORD"); v != "" {
+				ironicPassword = v
+			}
 		}
-	}
-	if site == "" {
-		if p.defaultSiteName != nil {
-			site = *p.defaultSiteName
-		} else {
-			site = "default"
+
+		ironic, err := httpbasic.NewBareMetalHTTPBasic(httpbasic.EndpointOpts{
+			IronicEndpoint:     url,
+			IronicUser:         ironicUser,
+			IronicUserPassword: ironicPassword,
+		})
+		if err != nil {
+			res.Diagnostics.AddError(
+				"Could not configure Ironic endpoint",
+				fmt.Sprintf("Error: %s", err.Error()),
+			)
+			return
+		}
+
+		ironic.Microversion = microversion
+		clients.ironic = ironic
+
+		// Handle inspector endpoint if provided
+		inspectorURL := data.Inspector.ValueString()
+		if inspectorURL == "" {
+			if v := os.Getenv("IRONIC_INSPECTOR_ENDPOINT"); v != "" {
+				inspectorURL = v
+			}
+		}
+
+		if inspectorURL != "" {
+			inspectorUser := data.InspectorUsername.ValueString()
+			if inspectorUser == "" {
+				if v := os.Getenv("INSPECTOR_HTTP_BASIC_USERNAME"); v != "" {
+					inspectorUser = v
+				}
+			}
+
+			inspectorPassword := data.InspectorPassword.ValueString()
+			if inspectorPassword == "" {
+				if v := os.Getenv("INSPECTOR_HTTP_BASIC_PASSWORD"); v != "" {
+					inspectorPassword = v
+				}
+			}
+
+			log.Printf("[DEBUG] Inspector endpoint is %s", inspectorURL)
+
+			inspector, err := httpbasicintrospection.NewBareMetalIntrospectionHTTPBasic(
+				httpbasicintrospection.EndpointOpts{
+					IronicInspectorEndpoint:     inspectorURL,
+					IronicInspectorUser:         inspectorUser,
+					IronicInspectorUserPassword: inspectorPassword,
+				},
+			)
+			if err != nil {
+				res.Diagnostics.AddError(
+					"Could not configure inspector endpoint",
+					fmt.Sprintf("Error: %s", err.Error()),
+				)
+				return
+			}
+			clients.inspector = inspector
+		}
+
+	} else {
+		log.Printf("[DEBUG] Using noauth auth_strategy")
+		ironic, err := noauth.NewBareMetalNoAuth(noauth.EndpointOpts{
+			IronicEndpoint: url,
+		})
+		if err != nil {
+			res.Diagnostics.AddError(
+				"Could not configure Ironic endpoint",
+				fmt.Sprintf("Error: %s", err.Error()),
+			)
+			return
+		}
+		ironic.Microversion = microversion
+		clients.ironic = ironic
+
+		// Handle inspector endpoint if provided
+		inspectorURL := data.Inspector.ValueString()
+		if inspectorURL == "" {
+			if v := os.Getenv("IRONIC_INSPECTOR_ENDPOINT"); v != "" {
+				inspectorURL = v
+			}
+		}
+
+		if inspectorURL != "" {
+			log.Printf("[DEBUG] Inspector endpoint is %s", inspectorURL)
+			inspector, err := noauthintrospection.NewBareMetalIntrospectionNoAuth(noauthintrospection.EndpointOpts{
+				IronicInspectorEndpoint: inspectorURL,
+			})
+			if err != nil {
+				res.Diagnostics.AddError(
+					"Could not configure inspector endpoint",
+					fmt.Sprintf("Error: %s", err.Error()),
+				)
+				return
+			}
+			clients.inspector = inspector
 		}
 	}
 
-	res.DataSourceData = clients
-	res.ResourceData = clients
-	res.EphemeralResourceData = clients
+	// Set timeout with default value of 0
+	timeout := int(data.Timeout.ValueInt64())
+	clients.timeout = timeout
+
+	res.DataSourceData = &clients
+	res.ResourceData = &clients
+	res.EphemeralResourceData = &clients
 }
 
 func (p *frameworkProvider) DataSources(ctx context.Context) []func() datasource.DataSource {

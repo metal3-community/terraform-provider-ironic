@@ -22,7 +22,6 @@ func TestAccIronicNode(t *testing.T) {
 		Providers:    testAccProviders,
 		CheckDestroy: testAccNodeDestroy,
 		Steps: []resource.TestStep{
-
 			// Create a node and check that it exists
 			{
 				Config: testAccNodeResource(""),

@@ -16,6 +16,7 @@ import (
 	httpbasicintrospection "github.com/gophercloud/gophercloud/v2/openstack/baremetalintrospection/httpbasic"
 	noauthintrospection "github.com/gophercloud/gophercloud/v2/openstack/baremetalintrospection/noauth"
 	"github.com/gophercloud/gophercloud/v2/pagination"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
 )
@@ -75,8 +76,8 @@ func (c *Clients) GetIronicClient() (*gophercloud.ServiceClient, error) {
 	go func() {
 		log.Printf("[INFO] Waiting for Ironic API...")
 		waitForAPI(ctx, c.ironic)
-		log.Printf("[INFO] API successfully connected, waiting for conductor...")
-		waitForConductor(ctx, c.ironic)
+		// log.Printf("[INFO] API successfully connected, waiting for conductor...")
+		// waitForConductor(ctx, c.ironic)
 		close(done)
 	}()
 
@@ -232,7 +233,7 @@ func Provider() *schema.Provider {
 		DataSourcesMap: map[string]*schema.Resource{
 			"ironic_introspection": dataSourceIronicIntrospection(),
 		},
-		ConfigureFunc: configureProvider,
+		ConfigureContextFunc: configureProvider,
 	}
 }
 
@@ -253,12 +254,19 @@ func init() {
 }
 
 // Creates a noauth Ironic client.
-func configureProvider(schema *schema.ResourceData) (any, error) {
+func configureProvider(ctx context.Context, schema *schema.ResourceData) (any, diag.Diagnostics) {
 	var clients Clients
+	var diags diag.Diagnostics
 
 	url := schema.Get("url").(string)
 	if url == "" {
-		return nil, fmt.Errorf("url is required for ironic provider")
+		diags = append(diags, diag.Diagnostic{
+			Severity: diag.Error,
+			Summary:  "Missing Ironic URL",
+			Detail:   "The 'url' field is required for the Ironic provider.",
+		})
+		// Return nil to indicate that the provider configuration failed.
+		return nil, diags
 	}
 	log.Printf("[DEBUG] Ironic endpoint is %s", url)
 
@@ -275,7 +283,7 @@ func configureProvider(schema *schema.ResourceData) (any, error) {
 			IronicUserPassword: ironicPassword,
 		})
 		if err != nil {
-			return nil, err
+			return nil, diag.Errorf("could not configure Ironic endpoint: %s", err.Error())
 		}
 
 		ironic.Microversion = schema.Get("microversion").(string)
@@ -295,7 +303,7 @@ func configureProvider(schema *schema.ResourceData) (any, error) {
 				},
 			)
 			if err != nil {
-				return nil, err
+				return nil, diag.FromErr(err)
 			}
 			clients.inspector = inspector
 		}
@@ -306,7 +314,7 @@ func configureProvider(schema *schema.ResourceData) (any, error) {
 			IronicEndpoint: url,
 		})
 		if err != nil {
-			return nil, err
+			return nil, diag.FromErr(err)
 		}
 		ironic.Microversion = schema.Get("microversion").(string)
 		clients.ironic = ironic
@@ -318,7 +326,7 @@ func configureProvider(schema *schema.ResourceData) (any, error) {
 				IronicInspectorEndpoint: inspectorURL,
 			})
 			if err != nil {
-				return nil, fmt.Errorf("could not configure inspector endpoint: %s", err.Error())
+				return nil, diag.Errorf("could not configure inspector endpoint: %s", err.Error())
 			}
 			clients.inspector = inspector
 		}
@@ -374,7 +382,7 @@ func waitForConductor(ctx context.Context, client *gophercloud.ServiceClient) {
 
 			err := drivers.ListDrivers(client, drivers.ListDriversOpts{
 				Detail: false,
-			}).EachPage(context.Background(), func(ctx context.Context, page pagination.Page) (bool, error) {
+			}).EachPage(ctx, func(ctx context.Context, page pagination.Page) (bool, error) {
 				actual, err := drivers.ExtractDrivers(page)
 				if err != nil {
 					return false, err

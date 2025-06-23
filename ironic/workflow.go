@@ -44,6 +44,7 @@ func ChangeProvisionStateToTarget(
 ) error {
 	// Run the provisionStateWorkflow - this could take a while
 	wf := provisionStateWorkflow{
+		ctx:         ctx,
 		target:      target,
 		client:      client,
 		wait:        5 * time.Second,

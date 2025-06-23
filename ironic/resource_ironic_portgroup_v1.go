@@ -14,6 +14,9 @@ func resourcePortGroupV1() *schema.Resource {
 		CreateContext: resourcePortGroupV1Create,
 		ReadContext:   resourcePortGroupV1Read,
 		DeleteContext: resourcePortGroupV1Delete,
+		Importer: &schema.ResourceImporter{
+			StateContext: resourcePortGroupV1Import,
+		},
 
 		Schema: map[string]*schema.Schema{
 			"uuid": {
@@ -52,7 +55,11 @@ func resourcePortGroupV1() *schema.Resource {
 	}
 }
 
-func resourcePortGroupV1Create(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
+func resourcePortGroupV1Create(
+	ctx context.Context,
+	d *schema.ResourceData,
+	meta any,
+) diag.Diagnostics {
 	client, err := GetIronicClient(ctx, meta)
 	if err != nil {
 		return diag.FromErr(err)
@@ -68,7 +75,11 @@ func resourcePortGroupV1Create(ctx context.Context, d *schema.ResourceData, meta
 	return resourcePortGroupV1Read(ctx, d, meta)
 }
 
-func resourcePortGroupV1Read(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
+func resourcePortGroupV1Read(
+	ctx context.Context,
+	d *schema.ResourceData,
+	meta any,
+) diag.Diagnostics {
 	client, err := GetIronicClient(ctx, meta)
 	if err != nil {
 		return diag.FromErr(err)
@@ -113,7 +124,64 @@ func resourcePortGroupV1Read(ctx context.Context, d *schema.ResourceData, meta a
 	return diag.FromErr(d.Set("extra", extra))
 }
 
-func resourcePortGroupV1Delete(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
+func resourcePortGroupV1Import(
+	ctx context.Context,
+	d *schema.ResourceData,
+	meta any,
+) ([]*schema.ResourceData, error) {
+	client, err := GetIronicClient(ctx, meta)
+	if err != nil {
+		return nil, err
+	}
+
+	port, err := portgroups.Get(ctx, client, d.Id()).Extract()
+	if err != nil {
+		return nil, err
+	}
+
+	err = d.Set("address", port.Address)
+	if err != nil {
+		return nil, err
+	}
+	err = d.Set("node_uuid", port.NodeUUID)
+	if err != nil {
+		return nil, err
+	}
+	err = d.Set("mode", port.Mode)
+	if err != nil {
+		return nil, err
+	}
+	err = d.Set("name", port.Name)
+	if err != nil {
+		return nil, err
+	}
+
+	var extra map[string]string
+
+	if ex, ok := d.Get("extra").(map[string]string); ok {
+		extra = ex
+	} else {
+		extra = make(map[string]string)
+	}
+
+	for k, v := range port.Extra {
+		if vs, ok := v.(string); ok {
+			extra[k] = vs
+		}
+	}
+
+	if err := d.Set("extra", extra); err != nil {
+		return nil, err
+	}
+
+	return []*schema.ResourceData{d}, nil
+}
+
+func resourcePortGroupV1Delete(
+	ctx context.Context,
+	d *schema.ResourceData,
+	meta any,
+) diag.Diagnostics {
 	client, err := GetIronicClient(ctx, meta)
 	if err != nil {
 		return diag.FromErr(err)
@@ -124,7 +192,10 @@ func resourcePortGroupV1Delete(ctx context.Context, d *schema.ResourceData, meta
 	return nil
 }
 
-func portGroupSchemaToCreateOpts(ctx context.Context, d *schema.ResourceData) *portgroups.CreateOpts {
+func portGroupSchemaToCreateOpts(
+	ctx context.Context,
+	d *schema.ResourceData,
+) *portgroups.CreateOpts {
 	extra := make(map[string]string)
 	if v, ok := d.Get("extra").(map[string]any); ok {
 		for k, val := range v {

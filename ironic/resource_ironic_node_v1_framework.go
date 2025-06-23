@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/appkins-org/terraform-provider-ironic/ironic/util"
 	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/v1/nodes"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -50,7 +51,7 @@ type nodeV1ResourceModel struct {
 	Available             types.Bool        `tfsdk:"available"`
 	Manage                types.Bool        `tfsdk:"manage"`
 	Properties            types.Map         `tfsdk:"properties"`
-	DriverInfo            types.Map         `tfsdk:"driver_info"`
+	DriverInfo            types.Dynamic     `tfsdk:"driver_info"`
 	InstanceInfo          types.Map         `tfsdk:"instance_info"`
 	InstanceUUID          types.String      `tfsdk:"instance_uuid"`
 	ResourceClass         types.String      `tfsdk:"resource_class"`
@@ -199,9 +200,8 @@ func (r *nodeV1Resource) Schema(
 				ElementType:         types.StringType,
 				Optional:            true,
 			},
-			"driver_info": schema.MapAttribute{
+			"driver_info": schema.DynamicAttribute{
 				MarkdownDescription: "The driver info of the node.",
-				ElementType:         types.StringType,
 				Optional:            true,
 				Sensitive:           true,
 			},
@@ -460,13 +460,15 @@ func (r *nodeV1Resource) Create(
 	}
 
 	if !plan.DriverInfo.IsNull() && !plan.DriverInfo.IsUnknown() {
-		driverInfo := make(map[string]any)
-		diags = plan.DriverInfo.ElementsAs(ctx, &driverInfo, false)
-		resp.Diagnostics.Append(diags...)
-		if resp.Diagnostics.HasError() {
-			return
+		if driverInfo, err := util.DynamicToMap(ctx, plan.DriverInfo); err != nil {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("driver_info"),
+				"Error Converting Driver Info",
+				fmt.Sprintf("Could not convert driver_info to map: %s", err),
+			)
+		} else {
+			createOpts.DriverInfo = driverInfo
 		}
-		createOpts.DriverInfo = driverInfo
 	}
 
 	if !plan.ExtraData.IsNull() && !plan.ExtraData.IsUnknown() {
@@ -760,9 +762,13 @@ func (r *nodeV1Resource) readNodeData(
 	}
 
 	if node.DriverInfo != nil {
-		driverInfo, diags := types.MapValueFrom(ctx, types.StringType, node.DriverInfo)
-		diagnostics.Append(diags...)
-		if !diagnostics.HasError() {
+		if driverInfo, err := util.MapToDynamic(ctx, node.DriverInfo); err != nil {
+			diagnostics.AddAttributeError(
+				path.Root("driver_info"),
+				"Error Converting Driver Info",
+				fmt.Sprintf("Could not convert driver_info to dynamic: %s", err),
+			)
+		} else {
 			model.DriverInfo = driverInfo
 		}
 	}

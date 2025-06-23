@@ -37,7 +37,11 @@ func TestAccIronicDeployment(t *testing.T) {
 				Config: testAccDeploymentResource(nodeName, resourceClass, allocationName),
 				Check: resource.ComposeTestCheckFunc(
 					CheckNodeExists("ironic_node_v1."+nodeName, &node),
-					resource.TestCheckResourceAttr("ironic_deployment."+nodeName, "provision_state", "active"),
+					resource.TestCheckResourceAttr(
+						"ironic_deployment."+nodeName,
+						"provision_state",
+						"active",
+					),
 				),
 			},
 		},
@@ -184,7 +188,11 @@ func TestFetchFullIgnition(t *testing.T) {
 		},
 	}
 	for _, tc := range testCases {
-		userData, err := fetchFullIgnition(tc.UserDataURL, tc.UserDataURLCACert, tc.UserDataURLHeaders)
+		userData, err := fetchFullIgnition(
+			tc.UserDataURL,
+			tc.UserDataURLCACert,
+			tc.UserDataURLHeaders,
+		)
 		if err != nil {
 			t.Errorf("expected err: %s", err)
 		}

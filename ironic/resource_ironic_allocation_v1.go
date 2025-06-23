@@ -70,7 +70,11 @@ func resourceAllocationV1() *schema.Resource {
 }
 
 // Create an allocation, including driving Ironic's state machine.
-func resourceAllocationV1Create(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
+func resourceAllocationV1Create(
+	ctx context.Context,
+	d *schema.ResourceData,
+	meta any,
+) diag.Diagnostics {
 	client, err := GetIronicClient(ctx, meta)
 	if err != nil {
 		return diag.FromErr(err)
@@ -114,7 +118,11 @@ func resourceAllocationV1Create(ctx context.Context, d *schema.ResourceData, met
 }
 
 // Read the allocation's data from Ironic.
-func resourceAllocationV1Read(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
+func resourceAllocationV1Read(
+	ctx context.Context,
+	d *schema.ResourceData,
+	meta any,
+) diag.Diagnostics {
 	client, err := GetIronicClient(ctx, meta)
 	if err != nil {
 		return diag.FromErr(err)
@@ -157,7 +165,11 @@ func resourceAllocationV1Read(ctx context.Context, d *schema.ResourceData, meta 
 }
 
 // Delete an allocation from Ironic if it exists.
-func resourceAllocationV1Delete(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
+func resourceAllocationV1Delete(
+	ctx context.Context,
+	d *schema.ResourceData,
+	meta any,
+) diag.Diagnostics {
 	client, err := GetIronicClient(ctx, meta)
 	if err != nil {
 		return diag.FromErr(err)
@@ -176,7 +188,10 @@ func resourceAllocationV1Delete(ctx context.Context, d *schema.ResourceData, met
 	return nil
 }
 
-func allocationSchemaToCreateOpts(ctx context.Context, d *schema.ResourceData) *allocations.CreateOpts {
+func allocationSchemaToCreateOpts(
+	ctx context.Context,
+	d *schema.ResourceData,
+) *allocations.CreateOpts {
 	candidateNodesRaw := d.Get("candidate_nodes").([]any)
 	traitsRaw := d.Get("traits").([]any)
 	extraRaw := d.Get("extra").(map[string]any)

@@ -11,7 +11,17 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/dynamicplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+)
+
+const (
+	DefaultAvailable = true
+	DefaultManage    = true
+	DefaultInspect   = true
+	DefaultClean     = false
 )
 
 // Ensure the implementation satisfies the expected interfaces.
@@ -28,54 +38,53 @@ type nodeV1Resource struct {
 
 // nodeV1ResourceModel describes the resource data model.
 type nodeV1ResourceModel struct {
-	ID                    types.String      `tfsdk:"id"`
-	Name                  types.String      `tfsdk:"name"`
-	NetworkInterface      types.String      `tfsdk:"network_interface"`
-	Driver                types.String      `tfsdk:"driver"`
-	BootInterface         types.String      `tfsdk:"boot_interface"`
-	ConsoleInterface      types.String      `tfsdk:"console_interface"`
-	DeployInterface       types.String      `tfsdk:"deploy_interface"`
-	InspectInterface      types.String      `tfsdk:"inspect_interface"`
-	ManagementInterface   types.String      `tfsdk:"management_interface"`
-	PowerInterface        types.String      `tfsdk:"power_interface"`
-	RAIDInterface         types.String      `tfsdk:"raid_interface"`
-	RescueInterface       types.String      `tfsdk:"rescue_interface"`
-	StorageInterface      types.String      `tfsdk:"storage_interface"`
-	VendorInterface       types.String      `tfsdk:"vendor_interface"`
-	Automated             types.Bool        `tfsdk:"automated_clean"`
-	Protected             types.Bool        `tfsdk:"protected"`
-	Maintenance           types.Bool        `tfsdk:"maintenance"`
-	MaintenanceReason     types.String      `tfsdk:"maintenance_reason"`
-	Clean                 types.Bool        `tfsdk:"clean"`
-	Inspect               types.Bool        `tfsdk:"inspect"`
-	Available             types.Bool        `tfsdk:"available"`
-	Manage                types.Bool        `tfsdk:"manage"`
-	Properties            types.Dynamic     `tfsdk:"properties"`
-	DriverInfo            types.Dynamic     `tfsdk:"driver_info"`
-	InstanceInfo          types.Dynamic     `tfsdk:"instance_info"`
-	InstanceUUID          types.String      `tfsdk:"instance_uuid"`
-	ResourceClass         types.String      `tfsdk:"resource_class"`
-	Ports                 []nodeV1PortModel `tfsdk:"ports"`
-	ProvisionState        types.String      `tfsdk:"provision_state"`
-	PowerState            types.String      `tfsdk:"power_state"`
-	TargetProvisionState  types.String      `tfsdk:"target_provision_state"`
-	TargetPowerState      types.String      `tfsdk:"target_power_state"`
-	LastError             types.String      `tfsdk:"last_error"`
-	ExtraData             types.Dynamic     `tfsdk:"extra"`
-	Owner                 types.String      `tfsdk:"owner"`
-	Lessee                types.String      `tfsdk:"lessee"`
-	Conductor             types.String      `tfsdk:"conductor"`
-	ConductorGroup        types.String      `tfsdk:"conductor_group"`
-	AllocationUUID        types.String      `tfsdk:"allocation_uuid"`
-	Chassis               types.String      `tfsdk:"chassis_uuid"`
-	Created               types.String      `tfsdk:"created_at"`
-	Updated               types.String      `tfsdk:"updated_at"`
-	AvailableCapabilities types.List        `tfsdk:"available_capabilities"`
-	CleanStep             types.Dynamic     `tfsdk:"clean_step"`
-	DeployStep            types.Dynamic     `tfsdk:"deploy_step"`
-	Fault                 types.String      `tfsdk:"fault"`
-	BIOSInterface         types.String      `tfsdk:"bios_interface"`
-	FirmwareInterface     types.String      `tfsdk:"firmware_interface"`
+	ID                   types.String      `tfsdk:"id"`
+	Name                 types.String      `tfsdk:"name"`
+	NetworkInterface     types.String      `tfsdk:"network_interface"`
+	Driver               types.String      `tfsdk:"driver"`
+	BootInterface        types.String      `tfsdk:"boot_interface"`
+	ConsoleInterface     types.String      `tfsdk:"console_interface"`
+	DeployInterface      types.String      `tfsdk:"deploy_interface"`
+	InspectInterface     types.String      `tfsdk:"inspect_interface"`
+	ManagementInterface  types.String      `tfsdk:"management_interface"`
+	PowerInterface       types.String      `tfsdk:"power_interface"`
+	RAIDInterface        types.String      `tfsdk:"raid_interface"`
+	RescueInterface      types.String      `tfsdk:"rescue_interface"`
+	StorageInterface     types.String      `tfsdk:"storage_interface"`
+	VendorInterface      types.String      `tfsdk:"vendor_interface"`
+	Automated            types.Bool        `tfsdk:"automated_clean"`
+	Protected            types.Bool        `tfsdk:"protected"`
+	Maintenance          types.Bool        `tfsdk:"maintenance"`
+	MaintenanceReason    types.String      `tfsdk:"maintenance_reason"`
+	Clean                types.Bool        `tfsdk:"clean"`
+	Inspect              types.Bool        `tfsdk:"inspect"`
+	Available            types.Bool        `tfsdk:"available"`
+	Manage               types.Bool        `tfsdk:"manage"`
+	Properties           types.Dynamic     `tfsdk:"properties"`
+	DriverInfo           types.Dynamic     `tfsdk:"driver_info"`
+	InstanceInfo         types.Dynamic     `tfsdk:"instance_info"`
+	InstanceUUID         types.String      `tfsdk:"instance_uuid"`
+	ResourceClass        types.String      `tfsdk:"resource_class"`
+	Ports                []nodeV1PortModel `tfsdk:"ports"`
+	ProvisionState       types.String      `tfsdk:"provision_state"`
+	PowerState           types.String      `tfsdk:"power_state"`
+	TargetProvisionState types.String      `tfsdk:"target_provision_state"`
+	TargetPowerState     types.String      `tfsdk:"target_power_state"`
+	LastError            types.String      `tfsdk:"last_error"`
+	ExtraData            types.Dynamic     `tfsdk:"extra"`
+	Owner                types.String      `tfsdk:"owner"`
+	Lessee               types.String      `tfsdk:"lessee"`
+	Conductor            types.String      `tfsdk:"conductor"`
+	ConductorGroup       types.String      `tfsdk:"conductor_group"`
+	AllocationUUID       types.String      `tfsdk:"allocation_uuid"`
+	Chassis              types.String      `tfsdk:"chassis_uuid"`
+	Created              types.String      `tfsdk:"created_at"`
+	Updated              types.String      `tfsdk:"updated_at"`
+	CleanStep            types.Dynamic     `tfsdk:"clean_step"`
+	DeployStep           types.Dynamic     `tfsdk:"deploy_step"`
+	Fault                types.String      `tfsdk:"fault"`
+	BIOSInterface        types.String      `tfsdk:"bios_interface"`
+	FirmwareInterface    types.String      `tfsdk:"firmware_interface"`
 }
 
 // nodeV1PortModel describes the port data model within the node.
@@ -107,6 +116,9 @@ func (r *nodeV1Resource) Schema(
 			"id": schema.StringAttribute{
 				MarkdownDescription: "Unique identifier of the node.",
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"name": schema.StringAttribute{
 				MarkdownDescription: "The name of the node.",
@@ -117,6 +129,9 @@ func (r *nodeV1Resource) Schema(
 				MarkdownDescription: "The network interface for the node.",
 				Optional:            true,
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"driver": schema.StringAttribute{
 				MarkdownDescription: "The driver associated with the node.",
@@ -126,51 +141,81 @@ func (r *nodeV1Resource) Schema(
 				MarkdownDescription: "The boot interface for the node.",
 				Optional:            true,
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"console_interface": schema.StringAttribute{
 				MarkdownDescription: "The console interface for the node.",
 				Optional:            true,
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"deploy_interface": schema.StringAttribute{
 				MarkdownDescription: "The deploy interface for the node.",
 				Optional:            true,
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"inspect_interface": schema.StringAttribute{
 				MarkdownDescription: "The inspect interface for the node.",
 				Optional:            true,
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"management_interface": schema.StringAttribute{
 				MarkdownDescription: "The management interface for the node.",
 				Optional:            true,
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"power_interface": schema.StringAttribute{
 				MarkdownDescription: "The power interface for the node.",
 				Optional:            true,
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"raid_interface": schema.StringAttribute{
 				MarkdownDescription: "The RAID interface for the node.",
 				Optional:            true,
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"rescue_interface": schema.StringAttribute{
 				MarkdownDescription: "The rescue interface for the node.",
 				Optional:            true,
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"storage_interface": schema.StringAttribute{
 				MarkdownDescription: "The storage interface for the node.",
 				Optional:            true,
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"vendor_interface": schema.StringAttribute{
 				MarkdownDescription: "The vendor interface for the node.",
 				Optional:            true,
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"automated_clean": schema.BoolAttribute{
 				MarkdownDescription: "Indicates whether the node should be cleaned automatically.",
@@ -194,133 +239,212 @@ func (r *nodeV1Resource) Schema(
 				MarkdownDescription: "The reason for putting the node in maintenance mode.",
 				Optional:            true,
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"properties": schema.DynamicAttribute{
 				MarkdownDescription: "The properties of the node.",
 				Optional:            true,
+				PlanModifiers: []planmodifier.Dynamic{
+					dynamicplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"driver_info": schema.DynamicAttribute{
 				MarkdownDescription: "The driver info of the node.",
 				Optional:            true,
 				Sensitive:           true,
+				PlanModifiers: []planmodifier.Dynamic{
+					dynamicplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"instance_info": schema.DynamicAttribute{
 				MarkdownDescription: "The instance info of the node.",
 				Optional:            true,
+				Computed:            true,
 				Sensitive:           true,
+				PlanModifiers: []planmodifier.Dynamic{
+					dynamicplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"instance_uuid": schema.StringAttribute{
 				MarkdownDescription: "The UUID of the instance associated with the node.",
 				Optional:            true,
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"resource_class": schema.StringAttribute{
 				MarkdownDescription: "The resource class of the node.",
 				Optional:            true,
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"provision_state": schema.StringAttribute{
 				MarkdownDescription: "The current provision state of the node.",
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"power_state": schema.StringAttribute{
 				MarkdownDescription: "The current power state of the node.",
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"target_provision_state": schema.StringAttribute{
 				MarkdownDescription: "The target provision state of the node.",
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"target_power_state": schema.StringAttribute{
 				MarkdownDescription: "The target power state of the node.",
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"last_error": schema.StringAttribute{
 				MarkdownDescription: "The last error message for the node.",
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"extra": schema.DynamicAttribute{
 				MarkdownDescription: "Extra metadata for the node.",
 				Optional:            true,
+				PlanModifiers: []planmodifier.Dynamic{
+					dynamicplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"owner": schema.StringAttribute{
 				MarkdownDescription: "The owner of the node.",
 				Optional:            true,
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"lessee": schema.StringAttribute{
 				MarkdownDescription: "The lessee of the node.",
 				Optional:            true,
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"conductor": schema.StringAttribute{
 				MarkdownDescription: "The conductor managing the node.",
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"conductor_group": schema.StringAttribute{
 				MarkdownDescription: "The conductor group for the node.",
 				Optional:            true,
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"allocation_uuid": schema.StringAttribute{
 				MarkdownDescription: "The UUID of the allocation associated with the node.",
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"chassis_uuid": schema.StringAttribute{
 				MarkdownDescription: "The UUID of the chassis associated with the node.",
 				Optional:            true,
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"created_at": schema.StringAttribute{
 				MarkdownDescription: "The timestamp when the node was created.",
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"updated_at": schema.StringAttribute{
 				MarkdownDescription: "The timestamp when the node was last updated.",
 				Computed:            true,
-			},
-			"available_capabilities": schema.ListAttribute{
-				MarkdownDescription: "The available capabilities of the node.",
-				ElementType:         types.StringType,
-				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"clean_step": schema.DynamicAttribute{
 				MarkdownDescription: "The current clean step for the node.",
 				Computed:            true,
+				PlanModifiers: []planmodifier.Dynamic{
+					dynamicplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"deploy_step": schema.DynamicAttribute{
 				MarkdownDescription: "The current deploy step for the node.",
 				Computed:            true,
+				PlanModifiers: []planmodifier.Dynamic{
+					dynamicplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"fault": schema.StringAttribute{
 				MarkdownDescription: "The fault status of the node.",
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"bios_interface": schema.StringAttribute{
 				MarkdownDescription: "The BIOS interface for the node.",
 				Optional:            true,
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"firmware_interface": schema.StringAttribute{
 				MarkdownDescription: "The firmware interface for the node.",
 				Optional:            true,
 				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"clean": schema.BoolAttribute{
 				MarkdownDescription: "Trigger node cleaning. When set to true, the node will be moved to the cleaning state.",
 				Optional:            true,
+				Computed:            true,
+				Default:             booldefault.StaticBool(DefaultClean),
 			},
 			"inspect": schema.BoolAttribute{
 				MarkdownDescription: "Trigger node inspection. When set to true, the node will be moved to the inspection state.",
 				Optional:            true,
+				Computed:            true,
+				Default:             booldefault.StaticBool(DefaultInspect),
 			},
 			"available": schema.BoolAttribute{
 				MarkdownDescription: "Make node available. When set to true, the node will be moved to the available state.",
 				Optional:            true,
+				Computed:            true,
+				Default:             booldefault.StaticBool(DefaultAvailable),
 			},
 			"manage": schema.BoolAttribute{
 				MarkdownDescription: "Manage node. When set to true, the node will be moved to the manageable state.",
 				Optional:            true,
+				Computed:            true,
+				Default:             booldefault.StaticBool(DefaultManage),
 			},
 		},
 		Blocks: map[string]schema.Block{
@@ -547,10 +671,25 @@ func (r *nodeV1Resource) Read(
 	var state nodeV1ResourceModel
 
 	// Get current state
-	diags := req.State.Get(ctx, &state)
-	resp.Diagnostics.Append(diags...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
+	}
+
+	if state.Available.IsNull() || state.Available.IsUnknown() {
+		state.Available = types.BoolValue(DefaultAvailable)
+	}
+
+	if state.Manage.IsNull() || state.Manage.IsUnknown() {
+		state.Manage = types.BoolValue(DefaultManage)
+	}
+
+	if state.Inspect.IsNull() || state.Inspect.IsUnknown() {
+		state.Inspect = types.BoolValue(DefaultInspect)
+	}
+
+	if state.Clean.IsNull() || state.Clean.IsUnknown() {
+		state.Clean = types.BoolValue(DefaultClean)
 	}
 
 	// Read the node from the API
@@ -560,8 +699,7 @@ func (r *nodeV1Resource) Read(
 	}
 
 	// Set refreshed state
-	diags = resp.State.Set(ctx, state)
-	resp.Diagnostics.Append(diags...)
+	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 }
 
 func (r *nodeV1Resource) Update(
@@ -789,7 +927,7 @@ func (r *nodeV1Resource) readNodeData(
 		}
 	}
 
-	if node.Extra != nil {
+	if len(node.Extra) > 0 {
 		if extra, err := util.MapToDynamic(ctx, node.Extra); err != nil {
 			diagnostics.AddAttributeError(
 				path.Root("extra"),
@@ -798,6 +936,18 @@ func (r *nodeV1Resource) readNodeData(
 			)
 		} else {
 			model.ExtraData = extra
+		}
+	}
+
+	if len(node.CleanStep) > 0 {
+		if cleanStep, err := util.MapToDynamic(ctx, node.CleanStep); err != nil {
+			diagnostics.AddAttributeError(
+				path.Root("clean_step"),
+				"Error Converting Clean Step",
+				fmt.Sprintf("Could not convert clean_step to dynamic: %s", err),
+			)
+		} else {
+			model.CleanStep = cleanStep
 		}
 	}
 

@@ -33,11 +33,31 @@ func TestAccIntrospection(t *testing.T) {
 			{
 				Config: testAccIntrospectionResource(nodeName),
 				Check: resource.ComposeTestCheckFunc(
-					resource.TestCheckResourceAttr("data.ironic_introspection.test-data", "finished", "true"),
-					resource.TestCheckResourceAttr("data.ironic_introspection.test-data", "interfaces.0.ip", "192.168.111.20"),
-					resource.TestCheckResourceAttr("data.ironic_introspection.test-data", "cpu_arch", "x86_64"),
-					resource.TestCheckResourceAttr("data.ironic_introspection.test-data", "cpu_count", "4"),
-					resource.TestCheckResourceAttr("data.ironic_introspection.test-data", "memory_mb", "16384"),
+					resource.TestCheckResourceAttr(
+						"data.ironic_introspection.test-data",
+						"finished",
+						"true",
+					),
+					resource.TestCheckResourceAttr(
+						"data.ironic_introspection.test-data",
+						"interfaces.0.ip",
+						"192.168.111.20",
+					),
+					resource.TestCheckResourceAttr(
+						"data.ironic_introspection.test-data",
+						"cpu_arch",
+						"x86_64",
+					),
+					resource.TestCheckResourceAttr(
+						"data.ironic_introspection.test-data",
+						"cpu_count",
+						"4",
+					),
+					resource.TestCheckResourceAttr(
+						"data.ironic_introspection.test-data",
+						"memory_mb",
+						"16384",
+					),
 				),
 			},
 		},

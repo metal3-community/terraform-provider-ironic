@@ -34,11 +34,22 @@ func TestAccIronicAllocation(t *testing.T) {
 				Config: testAccAllocationResource(nodeName, resourceClass, allocationName),
 				Check: resource.ComposeTestCheckFunc(
 					CheckNodeExists("ironic_node_v1."+nodeName, &node),
-					testAccCheckAllocationExists("ironic_allocation_v1."+allocationName, &allocation),
+					testAccCheckAllocationExists(
+						"ironic_allocation_v1."+allocationName,
+						&allocation,
+					),
 
 					// Ensure that the allocation is active, and found the node we expected
-					resource.TestCheckResourceAttr("ironic_allocation_v1."+allocationName, "state", "active"),
-					resource.TestCheckResourceAttrPtr("ironic_allocation_v1."+allocationName, "node_uuid", &node.UUID),
+					resource.TestCheckResourceAttr(
+						"ironic_allocation_v1."+allocationName,
+						"state",
+						"active",
+					),
+					resource.TestCheckResourceAttrPtr(
+						"ironic_allocation_v1."+allocationName,
+						"node_uuid",
+						&node.UUID,
+					),
 				),
 			},
 
@@ -46,7 +57,11 @@ func TestAccIronicAllocation(t *testing.T) {
 			{
 				Config: testAccAllocationResource(nodeName, resourceClass, allocationName),
 				Check: resource.ComposeTestCheckFunc(
-					resource.TestCheckResourceAttrPtr("ironic_node_v1."+nodeName, "instance_uuid", &allocation.UUID),
+					resource.TestCheckResourceAttrPtr(
+						"ironic_node_v1."+nodeName,
+						"instance_uuid",
+						&allocation.UUID,
+					),
 				),
 			},
 		},
@@ -54,7 +69,10 @@ func TestAccIronicAllocation(t *testing.T) {
 }
 
 // Calls gophercloud directly to ensure the allocation exists
-func testAccCheckAllocationExists(name string, allocation *allocations.Allocation) resource.TestCheckFunc {
+func testAccCheckAllocationExists(
+	name string,
+	allocation *allocations.Allocation,
+) resource.TestCheckFunc {
 	return func(state *terraform.State) error {
 		client, err := testAccProvider.Meta().(*Clients).GetIronicClient()
 		if err != nil {

@@ -69,7 +69,11 @@ func dataSourceIronicIntrospection() *schema.Resource {
 	}
 }
 
-func dataSourceIronicIntrospectionRead(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
+func dataSourceIronicIntrospectionRead(
+	ctx context.Context,
+	d *schema.ResourceData,
+	meta any,
+) diag.Diagnostics {
 	client, err := meta.(*Clients).GetInspectorClient()
 	if err != nil {
 		return diag.FromErr(err)

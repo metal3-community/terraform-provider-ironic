@@ -99,7 +99,11 @@ func resourceDeployment() *schema.Resource {
 }
 
 // Create an deployment, including driving Ironic's state machine.
-func resourceDeploymentCreate(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
+func resourceDeploymentCreate(
+	ctx context.Context,
+	d *schema.ResourceData,
+	meta any,
+) diag.Diagnostics {
 	client, err := GetIronicClient(ctx, meta)
 	if err != nil {
 		return diag.FromErr(err)
@@ -149,7 +153,9 @@ func resourceDeploymentCreate(ctx context.Context, d *schema.ResourceData, meta 
 				},
 			})
 			if err != nil {
-				return diag.FromErr(fmt.Errorf("could not update instance info capabilities: %s", err))
+				return diag.FromErr(
+					fmt.Errorf("could not update instance info capabilities: %s", err),
+				)
 			}
 		}
 	}
@@ -379,7 +385,11 @@ func buildConfigDrive(
 }
 
 // Read the deployment's data from Ironic.
-func resourceDeploymentRead(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
+func resourceDeploymentRead(
+	ctx context.Context,
+	d *schema.ResourceData,
+	meta any,
+) diag.Diagnostics {
 	client, err := GetIronicClient(ctx, meta)
 	if err != nil {
 		return diag.FromErr(err)
@@ -400,7 +410,11 @@ func resourceDeploymentRead(ctx context.Context, d *schema.ResourceData, meta an
 }
 
 // Delete an deployment from Ironic - this cleans the node and returns it's state to 'available'.
-func resourceDeploymentDelete(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
+func resourceDeploymentDelete(
+	ctx context.Context,
+	d *schema.ResourceData,
+	meta any,
+) diag.Diagnostics {
 	client, err := GetIronicClient(ctx, meta)
 	if err != nil {
 		return diag.FromErr(err)

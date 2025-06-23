@@ -17,6 +17,7 @@ import (
 	httpbasicintrospection "github.com/gophercloud/gophercloud/v2/openstack/baremetalintrospection/httpbasic"
 	noauthintrospection "github.com/gophercloud/gophercloud/v2/openstack/baremetalintrospection/noauth"
 	"github.com/gophercloud/gophercloud/v2/pagination"
+	"github.com/hashicorp/terraform-plugin-log/tfsdklog"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
@@ -75,10 +76,10 @@ func (c *Clients) GetIronicClient() (*gophercloud.ServiceClient, error) {
 
 	done := make(chan struct{})
 	go func() {
-		log.Printf("[INFO] Waiting for Ironic API...")
+		tfsdklog.Info(ctx, "Waiting for Ironic API to become available")
 		waitForAPI(ctx, c.ironic)
-		// log.Printf("[INFO] API successfully connected, waiting for conductor...")
-		// waitForConductor(ctx, c.ironic)
+		tfsdklog.Info(ctx, "Ironic API is up, waiting for conductor to be available")
+		waitForConductor(ctx, c.ironic)
 		close(done)
 	}()
 
@@ -119,7 +120,7 @@ func (c *Clients) GetInspectorClient() (*gophercloud.ServiceClient, error) {
 
 	done := make(chan struct{})
 	go func() {
-		log.Printf("[INFO] Waiting for Inspector API...")
+		tfsdklog.Info(ctx, "Waiting for Inspector API to become available")
 		waitForAPI(ctx, c.inspector)
 		close(done)
 	}()

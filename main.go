@@ -68,7 +68,9 @@ func main() {
 
 	err = tf6server.Serve(ironicProviderName, muxServer.ProviderServer, serveOpts...)
 	if err != nil {
-		log.Printf("[ERROR] Could not start serving the ProviderServer: %v", err)
+		tflog.Error(ctx, "Failed to start serving the ProviderServer", map[string]any{
+			"error": err,
+		})
 		os.Exit(1)
 	}
 }

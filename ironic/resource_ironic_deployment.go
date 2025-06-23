@@ -11,7 +11,9 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/v1/nodes"
 	util "github.com/gophercloud/utils/openstack/baremetal/v1/nodes"
 	retryablehttp "github.com/hashicorp/go-retryablehttp"
@@ -432,4 +434,32 @@ func resourceDeploymentDelete(
 		return diag.FromErr(fmt.Errorf("could not delete deployment: %s", err))
 	}
 	return diag.Diagnostics{}
+}
+
+// UpdateNode wraps gophercloud's update function, so we are able to retry on 409 when Ironic is busy.
+func UpdateNode(
+	ctx context.Context,
+	client *gophercloud.ServiceClient,
+	uuid string,
+	opts nodes.UpdateOpts,
+) (node *nodes.Node, err error) {
+	interval := 5 * time.Second
+	for range 5 {
+		node, err = nodes.Update(ctx, client, uuid, opts).Extract()
+		if err != nil {
+			if gophercloud.ResponseCodeIs(err, http.StatusConflict) {
+				log.Printf(
+					"[DEBUG] Failed to update node: ironic is busy, will try again in %s",
+					interval.String(),
+				)
+				time.Sleep(interval)
+				interval *= 2
+				continue
+			}
+		} else {
+			break
+		}
+	}
+
+	return
 }

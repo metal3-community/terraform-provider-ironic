@@ -2,902 +2,1113 @@ package ironic
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"log"
-	"net/http"
-	"strconv"
-	"time"
 
-	"github.com/gophercloud/gophercloud/v2"
+	"github.com/appkins-org/terraform-provider-ironic/ironic/util"
 	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/v1/nodes"
-	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/v1/ports"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	metal3v1alpha1 "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
-	"github.com/metal3-io/baremetal-operator/pkg/provisioner/ironic"
+	"github.com/hashicorp/terraform-plugin-framework-timetypes/timetypes"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/dynamicplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
-// Schema resource definition for an Ironic node.
-func resourceNodeV1() *schema.Resource {
-	return &schema.Resource{
-		CreateContext: resourceNodeV1Create,
-		ReadContext:   resourceNodeV1Read,
-		UpdateContext: resourceNodeV1Update,
-		DeleteContext: resourceNodeV1Delete,
-		Importer: &schema.ResourceImporter{
-			StateContext: resourceNodeV1Import,
+const (
+	DefaultAvailable = true
+	DefaultManage    = true
+	DefaultInspect   = true
+	DefaultClean     = false
+)
+
+// Ensure the implementation satisfies the expected interfaces.
+var (
+	_ resource.Resource                = &nodeV1Resource{}
+	_ resource.ResourceWithConfigure   = &nodeV1Resource{}
+	_ resource.ResourceWithImportState = &nodeV1Resource{}
+)
+
+// nodeV1Resource defines the resource implementation.
+type nodeV1Resource struct {
+	clients *Clients
+}
+
+// nodeV1ResourceModel describes the resource data model.
+type nodeV1ResourceModel struct {
+	ID                   types.String      `tfsdk:"id"`
+	Name                 types.String      `tfsdk:"name"`
+	AllocationUUID       types.String      `tfsdk:"allocation_uuid"`
+	Automated            types.Bool        `tfsdk:"automated_clean"`
+	Available            types.Bool        `tfsdk:"available"`
+	BIOSInterface        types.String      `tfsdk:"bios_interface"`
+	BootInterface        types.String      `tfsdk:"boot_interface"`
+	Chassis              types.String      `tfsdk:"chassis_uuid"`
+	Clean                types.Bool        `tfsdk:"clean"`
+	CleanStep            types.Dynamic     `tfsdk:"clean_step"`
+	Conductor            types.String      `tfsdk:"conductor"`
+	ConductorGroup       types.String      `tfsdk:"conductor_group"`
+	ConsoleInterface     types.String      `tfsdk:"console_interface"`
+	DeployInterface      types.String      `tfsdk:"deploy_interface"`
+	DeployStep           types.Dynamic     `tfsdk:"deploy_step"`
+	Driver               types.String      `tfsdk:"driver"`
+	DriverInfo           types.Dynamic     `tfsdk:"driver_info"`
+	ExtraData            types.Dynamic     `tfsdk:"extra"`
+	Fault                types.String      `tfsdk:"fault"`
+	FirmwareInterface    types.String      `tfsdk:"firmware_interface"`
+	Inspect              types.Bool        `tfsdk:"inspect"`
+	InspectInterface     types.String      `tfsdk:"inspect_interface"`
+	InstanceInfo         types.Dynamic     `tfsdk:"instance_info"`
+	InstanceUUID         types.String      `tfsdk:"instance_uuid"`
+	LastError            types.String      `tfsdk:"last_error"`
+	Lessee               types.String      `tfsdk:"lessee"`
+	Maintenance          types.Bool        `tfsdk:"maintenance"`
+	MaintenanceReason    types.String      `tfsdk:"maintenance_reason"`
+	Manage               types.Bool        `tfsdk:"manage"`
+	ManagementInterface  types.String      `tfsdk:"management_interface"`
+	NetworkInterface     types.String      `tfsdk:"network_interface"`
+	Owner                types.String      `tfsdk:"owner"`
+	Ports                []nodeV1PortModel `tfsdk:"ports"`
+	PowerInterface       types.String      `tfsdk:"power_interface"`
+	PowerState           types.String      `tfsdk:"power_state"`
+	Properties           types.Dynamic     `tfsdk:"properties"`
+	Protected            types.Bool        `tfsdk:"protected"`
+	ProvisionState       types.String      `tfsdk:"provision_state"`
+	RAIDInterface        types.String      `tfsdk:"raid_interface"`
+	RescueInterface      types.String      `tfsdk:"rescue_interface"`
+	ResourceClass        types.String      `tfsdk:"resource_class"`
+	StorageInterface     types.String      `tfsdk:"storage_interface"`
+	TargetPowerState     types.String      `tfsdk:"target_power_state"`
+	TargetProvisionState types.String      `tfsdk:"target_provision_state"`
+	VendorInterface      types.String      `tfsdk:"vendor_interface"`
+	Updated              timetypes.RFC3339 `tfsdk:"updated_at"`
+	Created              timetypes.RFC3339 `tfsdk:"created_at"`
+	InspectionStarted    timetypes.RFC3339 `tfsdk:"inspection_started_at"`
+	InspectionFinished   timetypes.RFC3339 `tfsdk:"inspection_finished_at"`
+	ProvisionUpdated     timetypes.RFC3339 `tfsdk:"provision_updated_at"`
+}
+
+// nodeV1PortModel describes the port data model within the node.
+type nodeV1PortModel struct {
+	UUID       types.String `tfsdk:"uuid"`
+	MACAddress types.String `tfsdk:"mac_address"`
+}
+
+func NewNodeV1Resource() resource.Resource {
+	return &nodeV1Resource{}
+}
+
+func (r *nodeV1Resource) Metadata(
+	ctx context.Context,
+	req resource.MetadataRequest,
+	resp *resource.MetadataResponse,
+) {
+	resp.TypeName = req.ProviderTypeName + "_node_v1"
+}
+
+func (r *nodeV1Resource) Schema(
+	ctx context.Context,
+	req resource.SchemaRequest,
+	resp *resource.SchemaResponse,
+) {
+	resp.Schema = schema.Schema{
+		MarkdownDescription: "Node v1 resource represents a single node in Ironic.",
+		Attributes: map[string]schema.Attribute{
+			"id": schema.StringAttribute{
+				MarkdownDescription: "Unique identifier of the node.",
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"name": schema.StringAttribute{
+				MarkdownDescription: "The name of the node.",
+				Optional:            true,
+				Computed:            true,
+			},
+			"network_interface": schema.StringAttribute{
+				MarkdownDescription: "The network interface for the node.",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"driver": schema.StringAttribute{
+				MarkdownDescription: "The driver associated with the node.",
+				Required:            true,
+			},
+			"boot_interface": schema.StringAttribute{
+				MarkdownDescription: "The boot interface for the node.",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"console_interface": schema.StringAttribute{
+				MarkdownDescription: "The console interface for the node.",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"deploy_interface": schema.StringAttribute{
+				MarkdownDescription: "The deploy interface for the node.",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"inspect_interface": schema.StringAttribute{
+				MarkdownDescription: "The inspect interface for the node.",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"management_interface": schema.StringAttribute{
+				MarkdownDescription: "The management interface for the node.",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"power_interface": schema.StringAttribute{
+				MarkdownDescription: "The power interface for the node.",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"raid_interface": schema.StringAttribute{
+				MarkdownDescription: "The RAID interface for the node.",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"rescue_interface": schema.StringAttribute{
+				MarkdownDescription: "The rescue interface for the node.",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"storage_interface": schema.StringAttribute{
+				MarkdownDescription: "The storage interface for the node.",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"vendor_interface": schema.StringAttribute{
+				MarkdownDescription: "The vendor interface for the node.",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"automated_clean": schema.BoolAttribute{
+				MarkdownDescription: "Indicates whether the node should be cleaned automatically.",
+				Optional:            true,
+				Computed:            true,
+				Default:             booldefault.StaticBool(true),
+			},
+			"protected": schema.BoolAttribute{
+				MarkdownDescription: "Indicates whether the node is protected.",
+				Optional:            true,
+				Computed:            true,
+				Default:             booldefault.StaticBool(false),
+			},
+			"maintenance": schema.BoolAttribute{
+				MarkdownDescription: "Indicates whether the node is in maintenance mode.",
+				Optional:            true,
+				Computed:            true,
+				Default:             booldefault.StaticBool(false),
+			},
+			"maintenance_reason": schema.StringAttribute{
+				MarkdownDescription: "The reason for putting the node in maintenance mode.",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"properties": schema.DynamicAttribute{
+				MarkdownDescription: "The properties of the node.",
+				Optional:            true,
+				PlanModifiers: []planmodifier.Dynamic{
+					dynamicplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"driver_info": schema.DynamicAttribute{
+				MarkdownDescription: "The driver info of the node.",
+				Optional:            true,
+				Sensitive:           true,
+				PlanModifiers: []planmodifier.Dynamic{
+					dynamicplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"instance_info": schema.DynamicAttribute{
+				MarkdownDescription: "The instance info of the node.",
+				Optional:            true,
+				Computed:            true,
+				Sensitive:           true,
+				PlanModifiers: []planmodifier.Dynamic{
+					dynamicplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"instance_uuid": schema.StringAttribute{
+				MarkdownDescription: "The UUID of the instance associated with the node.",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"resource_class": schema.StringAttribute{
+				MarkdownDescription: "The resource class of the node.",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"provision_state": schema.StringAttribute{
+				MarkdownDescription: "The current provision state of the node.",
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"power_state": schema.StringAttribute{
+				MarkdownDescription: "The current power state of the node.",
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"target_provision_state": schema.StringAttribute{
+				MarkdownDescription: "The target provision state of the node.",
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"target_power_state": schema.StringAttribute{
+				MarkdownDescription: "The target power state of the node.",
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"last_error": schema.StringAttribute{
+				MarkdownDescription: "The last error message for the node.",
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"extra": schema.DynamicAttribute{
+				MarkdownDescription: "Extra metadata for the node.",
+				Optional:            true,
+				PlanModifiers: []planmodifier.Dynamic{
+					dynamicplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"owner": schema.StringAttribute{
+				MarkdownDescription: "The owner of the node.",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"lessee": schema.StringAttribute{
+				MarkdownDescription: "The lessee of the node.",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"conductor": schema.StringAttribute{
+				MarkdownDescription: "The conductor managing the node.",
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"conductor_group": schema.StringAttribute{
+				MarkdownDescription: "The conductor group for the node.",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"allocation_uuid": schema.StringAttribute{
+				MarkdownDescription: "The UUID of the allocation associated with the node.",
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"chassis_uuid": schema.StringAttribute{
+				MarkdownDescription: "The UUID of the chassis associated with the node.",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"created_at": schema.StringAttribute{
+				MarkdownDescription: "The timestamp when the node was created.",
+				CustomType:          timetypes.RFC3339Type{},
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"updated_at": schema.StringAttribute{
+				MarkdownDescription: "The timestamp when the node was last updated.",
+				CustomType:          timetypes.RFC3339Type{},
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"inspection_started_at": schema.StringAttribute{
+				MarkdownDescription: "The timestamp when the node inspection started.",
+				CustomType:          timetypes.RFC3339Type{},
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"inspection_finished_at": schema.StringAttribute{
+				MarkdownDescription: "The timestamp when the node inspection finished.",
+				CustomType:          timetypes.RFC3339Type{},
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"provision_updated_at": schema.StringAttribute{
+				MarkdownDescription: "The timestamp when the node provision was last updated.",
+				CustomType:          timetypes.RFC3339Type{},
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"clean_step": schema.DynamicAttribute{
+				MarkdownDescription: "The current clean step for the node.",
+				Computed:            true,
+				PlanModifiers: []planmodifier.Dynamic{
+					dynamicplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"deploy_step": schema.DynamicAttribute{
+				MarkdownDescription: "The current deploy step for the node.",
+				Computed:            true,
+				PlanModifiers: []planmodifier.Dynamic{
+					dynamicplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"fault": schema.StringAttribute{
+				MarkdownDescription: "The fault status of the node.",
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"bios_interface": schema.StringAttribute{
+				MarkdownDescription: "The BIOS interface for the node.",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"firmware_interface": schema.StringAttribute{
+				MarkdownDescription: "The firmware interface for the node.",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"clean": schema.BoolAttribute{
+				MarkdownDescription: "Trigger node cleaning. When set to true, the node will be moved to the cleaning state.",
+				Optional:            true,
+				Computed:            true,
+				Default:             booldefault.StaticBool(DefaultClean),
+			},
+			"inspect": schema.BoolAttribute{
+				MarkdownDescription: "Trigger node inspection. When set to true, the node will be moved to the inspection state.",
+				Optional:            true,
+				Computed:            true,
+				Default:             booldefault.StaticBool(DefaultInspect),
+			},
+			"available": schema.BoolAttribute{
+				MarkdownDescription: "Make node available. When set to true, the node will be moved to the available state.",
+				Optional:            true,
+				Computed:            true,
+				Default:             booldefault.StaticBool(DefaultAvailable),
+			},
+			"manage": schema.BoolAttribute{
+				MarkdownDescription: "Manage node. When set to true, the node will be moved to the manageable state.",
+				Optional:            true,
+				Computed:            true,
+				Default:             booldefault.StaticBool(DefaultManage),
+			},
 		},
-
-		Schema: map[string]*schema.Schema{
-			"name": {
-				Type:     schema.TypeString,
-				Optional: true,
-			},
-			"boot_interface": {
-				Type:     schema.TypeString,
-				Optional: true,
-				Computed: true,
-			},
-			"clean": {
-				Type:     schema.TypeBool,
-				Optional: true,
-			},
-			"conductor_group": {
-				Type:     schema.TypeString,
-				Optional: true,
-				Computed: true,
-			},
-			"console_interface": {
-				Type:     schema.TypeString,
-				Optional: true,
-				Computed: true,
-			},
-			"deploy_interface": {
-				Type:     schema.TypeString,
-				Optional: true,
-				Computed: true,
-			},
-			"driver": {
-				Type:     schema.TypeString,
-				Required: true,
-			},
-			"driver_info": {
-				Type:     schema.TypeMap,
-				Optional: true,
-				DiffSuppressFunc: func(k, old, _ string, _ *schema.ResourceData) bool {
-					/* FIXME: Password updates aren't considered. How can I know if the *local* data changed? */
-					/* FIXME: Support drivers other than IPMI */
-					if k == "driver_info.ipmi_password" && old == "******" {
-						return true
-					}
-
-					return false
+		Blocks: map[string]schema.Block{
+			"ports": schema.ListNestedBlock{
+				MarkdownDescription: "Ports associated with the node.",
+				NestedObject: schema.NestedBlockObject{
+					Attributes: map[string]schema.Attribute{
+						"uuid": schema.StringAttribute{
+							MarkdownDescription: "The UUID of the port.",
+							Computed:            true,
+						},
+						"mac_address": schema.StringAttribute{
+							MarkdownDescription: "The MAC address of the port.",
+							Required:            true,
+						},
+					},
 				},
-
-				// driver_info could contain passwords
-				Sensitive: true,
-			},
-			"instance_info": {
-				Type:     schema.TypeMap,
-				Optional: true,
-			},
-			"properties": {
-				Type:     schema.TypeMap,
-				Optional: true,
-			},
-			"root_device": {
-				Type:     schema.TypeMap,
-				Optional: true,
-			},
-			"extra": {
-				Type:     schema.TypeMap,
-				Optional: true,
-			},
-			"inspect_interface": {
-				Type:     schema.TypeString,
-				Optional: true,
-				Computed: true,
-			},
-			"instance_uuid": {
-				Type:     schema.TypeString,
-				Computed: true,
-			},
-			"inspect": {
-				Type:     schema.TypeBool,
-				Optional: true,
-			},
-			"available": {
-				Type:     schema.TypeBool,
-				Optional: true,
-			},
-			"manage": {
-				Type:     schema.TypeBool,
-				Optional: true,
-			},
-			"management_interface": {
-				Type:     schema.TypeString,
-				Optional: true,
-				Computed: true,
-			},
-			"network_interface": {
-				Type:     schema.TypeString,
-				Optional: true,
-				Computed: true,
-			},
-			"power_interface": {
-				Type:     schema.TypeString,
-				Optional: true,
-				Computed: true,
-			},
-			"raid_interface": {
-				Type:     schema.TypeString,
-				Optional: true,
-				Computed: true,
-			},
-			"rescue_interface": {
-				Type:     schema.TypeString,
-				Optional: true,
-				Computed: true,
-			},
-			"resource_class": {
-				Type:     schema.TypeString,
-				Optional: true,
-			},
-			"storage_interface": {
-				Type:     schema.TypeString,
-				Optional: true,
-				Computed: true,
-			},
-			"vendor_interface": {
-				Type:     schema.TypeString,
-				Optional: true,
-				Computed: true,
-			},
-			"owner": {
-				Type:     schema.TypeString,
-				Optional: true,
-				Computed: true,
-			},
-			"ports": {
-				Type:     schema.TypeSet,
-				Optional: true,
-				Elem: &schema.Schema{
-					Type: schema.TypeMap,
-				},
-			},
-			"provision_state": {
-				Type:     schema.TypeString,
-				Computed: true,
-			},
-			"power_state": {
-				Type:     schema.TypeString,
-				Computed: true,
-			},
-			"target_power_state": {
-				Type:     schema.TypeString,
-				Optional: true,
-
-				// If power_state is same as target_power_state, we have no changes to apply
-				DiffSuppressFunc: func(_, _, newState string, d *schema.ResourceData) bool {
-					return newState == d.Get("power_state").(string)
-				},
-			},
-			"power_state_timeout": {
-				Type:     schema.TypeInt,
-				Optional: true,
-				Computed: true,
-			},
-			"raid_config": {
-				Type:     schema.TypeString,
-				Optional: true,
-				Computed: true,
-			},
-			"bios_settings": {
-				Type:     schema.TypeString,
-				Optional: true,
-				Computed: true,
 			},
 		},
 	}
 }
 
-// Create a node, including driving Ironic's state machine.
-func resourceNodeV1Create(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
-	client, err := meta.(*Clients).GetIronicClient()
-	if err != nil {
-		return diag.FromErr(err)
+func (r *nodeV1Resource) Configure(
+	ctx context.Context,
+	req resource.ConfigureRequest,
+	resp *resource.ConfigureResponse,
+) {
+	if req.ProviderData == nil {
+		return
 	}
 
-	// Create the node object in Ironic
-	createOpts := schemaToCreateOpts(ctx, d)
-	result, err := nodes.Create(ctx, client, createOpts).Extract()
-	if err != nil {
-		d.SetId("")
-		return diag.FromErr(err)
-	}
-
-	// Setting the ID is what tells terraform we were successful in creating the node
-	log.Printf("[DEBUG] Node created with ID %s\n", d.Id())
-	d.SetId(result.UUID)
-
-	// Create ports as part of the node object - you may also use the native port resource
-	portSet := d.Get("ports").(*schema.Set)
-	if portSet != nil {
-		portList := portSet.List()
-		for _, portInterface := range portList {
-			port := portInterface.(map[string]any)
-
-			// Terraform map can't handle bool... seriously.
-			var pxeEnabled bool
-			if port["pxe_enabled"] != nil {
-				if port["pxe_enabled"] == "true" {
-					pxeEnabled = true
-				} else {
-					pxeEnabled = false
-				}
-			}
-			// FIXME: All values other than address and pxe
-			portCreateOpts := ports.CreateOpts{
-				NodeUUID:   d.Id(),
-				Address:    port["address"].(string),
-				PXEEnabled: &pxeEnabled,
-			}
-			_, err := ports.Create(ctx, client, portCreateOpts).Extract()
-			if err != nil {
-				_ = resourcePortV1Read(ctx, d, meta)
-				return diag.FromErr(err)
-			}
-		}
-	}
-
-	if instanceInfo := d.Get("instance_info").(map[string]any); len(instanceInfo) > 0 {
-		_, err = nodes.Update(ctx, client, d.Id(), nodes.UpdateOpts{
-			nodes.UpdateOperation{
-				Op:    nodes.ReplaceOp,
-				Path:  "/instance_info",
-				Value: instanceInfo,
-			},
-		}).Extract()
-		if err != nil {
-			return diag.FromErr(fmt.Errorf("could not update instance_info: %s", err))
-		}
-	}
-
-	// Make node manageable
-	if d.Get("manage").(bool) || d.Get("clean").(bool) || d.Get("inspect").(bool) {
-		if err := ChangeProvisionStateToTarget(ctx, client, d.Id(), "manage", nil, nil, nil); err != nil {
-			return diag.FromErr(fmt.Errorf("could not manage: %s", err))
-		}
-	}
-
-	// Clean node
-	if d.Get("clean").(bool) {
-		if err := setRAIDConfig(ctx, client, d); err != nil {
-			return diag.FromErr(fmt.Errorf("fail to set raid config: %s", err))
-		}
-
-		var cleanSteps []nodes.CleanStep
-		if cleanSteps, err = buildManualCleaningSteps(d.Get("raid_interface").(string), d.Get("raid_config").(string), d.Get("bios_settings").(string)); err != nil {
-			return diag.FromErr(fmt.Errorf("fail to build raid clean steps: %s", err))
-		}
-
-		if err := ChangeProvisionStateToTarget(ctx, client, d.Id(), "clean", nil, nil, cleanSteps); err != nil {
-			return diag.FromErr(fmt.Errorf("could not clean: %s", err))
-		}
-	}
-
-	// Inspect node
-	if inspect, ok := d.Get("inspect").(bool); ok && inspect {
-		if err := ChangeProvisionStateToTarget(ctx, client, d.Id(), "inspect", nil, nil, nil); err != nil {
-			return diag.FromErr(fmt.Errorf("could not inspect: %s", err))
-		}
-	}
-
-	// Make node available
-	if available, ok := d.Get("available").(bool); ok && available {
-		if err := ChangeProvisionStateToTarget(ctx, client, d.Id(), "provide", nil, nil, nil); err != nil {
-			return diag.FromErr(fmt.Errorf("could not make node available: %s", err))
-		}
-	}
-
-	// Change power state, if required
-	if targetPowerState, ok := d.Get("target_power_state").(string); ok && targetPowerState != "" {
-		err := changePowerState(ctx, client, d, nodes.TargetPowerState(targetPowerState))
-		if err != nil {
-			return diag.FromErr(fmt.Errorf("could not change power state: %s", err))
-		}
-	}
-
-	return resourceNodeV1Read(ctx, d, meta)
-}
-
-// Read the node's data from Ironic.
-func resourceNodeV1Read(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
-	clients, ok := meta.(*Clients)
+	clients, ok := req.ProviderData.(*Clients)
 	if !ok {
-		return diag.FromErr(fmt.Errorf("expected meta to be of type *Clients, got %T", meta))
-	}
-	client, err := clients.GetIronicClient()
-	if err != nil {
-		return diag.FromErr(err)
-	}
-
-	node, err := nodes.Get(ctx, client, d.Id()).Extract()
-	if err != nil {
-		d.SetId("")
-		return diag.FromErr(err)
-	}
-
-	// TODO: Ironic's Create is different than the Node object itself, GET returns things like the
-	//  RaidConfig, we need to add those and handle them in CREATE
-	err = d.Set("boot_interface", node.BootInterface)
-	if err != nil {
-		return diag.FromErr(err)
-	}
-	err = d.Set("conductor_group", node.ConductorGroup)
-	if err != nil {
-		return diag.FromErr(err)
-	}
-	err = d.Set("console_interface", node.ConsoleInterface)
-	if err != nil {
-		return diag.FromErr(err)
-	}
-	err = d.Set("deploy_interface", node.DeployInterface)
-	if err != nil {
-		return diag.FromErr(err)
-	}
-	err = d.Set("driver", node.Driver)
-	if err != nil {
-		return diag.FromErr(err)
-	}
-	err = d.Set("driver_info", node.DriverInfo)
-	if err != nil {
-		return diag.FromErr(err)
-	}
-	err = d.Set("extra", node.Extra)
-	if err != nil {
-		return diag.FromErr(err)
-	}
-	err = d.Set("inspect_interface", node.InspectInterface)
-	if err != nil {
-		return diag.FromErr(err)
-	}
-	err = d.Set("instance_uuid", node.InstanceUUID)
-	if err != nil {
-		return diag.FromErr(err)
-	}
-	err = d.Set("management_interface", node.ManagementInterface)
-	if err != nil {
-		return diag.FromErr(err)
-	}
-	err = d.Set("name", node.Name)
-	if err != nil {
-		return diag.FromErr(err)
-	}
-	err = d.Set("network_interface", node.NetworkInterface)
-	if err != nil {
-		return diag.FromErr(err)
-	}
-	err = d.Set("owner", node.Owner)
-	if err != nil {
-		return diag.FromErr(err)
-	}
-	err = d.Set("power_interface", node.PowerInterface)
-	if err != nil {
-		return diag.FromErr(err)
-	}
-	err = d.Set("power_state", node.PowerState)
-	if err != nil {
-		return diag.FromErr(err)
-	}
-	err = d.Set("root_device", node.Properties["root_device"])
-	if err != nil {
-		return diag.FromErr(err)
-	}
-	delete(node.Properties, "root_device")
-	err = d.Set("properties", cleanProperties(node.Properties))
-	if err != nil {
-		return diag.FromErr(err)
-	}
-	err = d.Set("raid_interface", node.RAIDInterface)
-	if err != nil {
-		return diag.FromErr(err)
-	}
-	err = d.Set("rescue_interface", node.RescueInterface)
-	if err != nil {
-		return diag.FromErr(err)
-	}
-	err = d.Set("resource_class", node.ResourceClass)
-	if err != nil {
-		return diag.FromErr(err)
-	}
-	err = d.Set("storage_interface", node.StorageInterface)
-	if err != nil {
-		return diag.FromErr(err)
-	}
-	err = d.Set("vendor_interface", node.VendorInterface)
-	if err != nil {
-		return diag.FromErr(err)
-	}
-	return diag.FromErr(d.Set("provision_state", node.ProvisionState))
-}
-
-// Import the node's data from Ironic.
-func resourceNodeV1Import(
-	ctx context.Context,
-	d *schema.ResourceData,
-	meta any,
-) ([]*schema.ResourceData, error) {
-	client, err := meta.(*Clients).GetIronicClient()
-	if err != nil {
-		return []*schema.ResourceData{d}, err
-	}
-
-	node, err := nodes.Get(ctx, client, d.Id()).Extract()
-	if err != nil {
-		d.SetId("")
-		return []*schema.ResourceData{d}, err
-	}
-
-	// TODO: Ironic's Create is different than the Node object itself, GET returns things like the
-	//  RaidConfig, we need to add those and handle them in CREATE
-	err = d.Set("boot_interface", node.BootInterface)
-	if err != nil {
-		return nil, err
-	}
-	err = d.Set("conductor_group", node.ConductorGroup)
-	if err != nil {
-		return nil, err
-	}
-	err = d.Set("console_interface", node.ConsoleInterface)
-	if err != nil {
-		return []*schema.ResourceData{d}, err
-	}
-	err = d.Set("deploy_interface", node.DeployInterface)
-	if err != nil {
-		return []*schema.ResourceData{d}, err
-	}
-	err = d.Set("driver", node.Driver)
-	if err != nil {
-		return []*schema.ResourceData{d}, err
-	}
-	err = d.Set("driver_info", node.DriverInfo)
-	if err != nil {
-		return []*schema.ResourceData{d}, err
-	}
-	err = d.Set("extra", node.Extra)
-	if err != nil {
-		return []*schema.ResourceData{d}, err
-	}
-	err = d.Set("inspect_interface", node.InspectInterface)
-	if err != nil {
-		return []*schema.ResourceData{d}, err
-	}
-	err = d.Set("instance_uuid", node.InstanceUUID)
-	if err != nil {
-		return []*schema.ResourceData{d}, err
-	}
-	err = d.Set("management_interface", node.ManagementInterface)
-	if err != nil {
-		return []*schema.ResourceData{d}, err
-	}
-	err = d.Set("name", node.Name)
-	if err != nil {
-		return []*schema.ResourceData{d}, err
-	}
-	err = d.Set("network_interface", node.NetworkInterface)
-	if err != nil {
-		return []*schema.ResourceData{d}, err
-	}
-	err = d.Set("owner", node.Owner)
-	if err != nil {
-		return []*schema.ResourceData{d}, err
-	}
-	err = d.Set("power_interface", node.PowerInterface)
-	if err != nil {
-		return []*schema.ResourceData{d}, err
-	}
-	err = d.Set("power_state", node.PowerState)
-	if err != nil {
-		return []*schema.ResourceData{d}, err
-	}
-	err = d.Set("root_device", node.Properties["root_device"])
-	if err != nil {
-		return []*schema.ResourceData{d}, err
-	}
-	delete(node.Properties, "root_device")
-	err = d.Set("properties", cleanProperties(node.Properties))
-	if err != nil {
-		return []*schema.ResourceData{d}, err
-	}
-	err = d.Set("raid_interface", node.RAIDInterface)
-	if err != nil {
-		return []*schema.ResourceData{d}, err
-	}
-	err = d.Set("rescue_interface", node.RescueInterface)
-	if err != nil {
-		return []*schema.ResourceData{d}, err
-	}
-	err = d.Set("resource_class", node.ResourceClass)
-	if err != nil {
-		return []*schema.ResourceData{d}, err
-	}
-	err = d.Set("storage_interface", node.StorageInterface)
-	if err != nil {
-		return []*schema.ResourceData{d}, err
-	}
-	err = d.Set("vendor_interface", node.VendorInterface)
-	if err != nil {
-		return []*schema.ResourceData{d}, err
-	}
-	err = d.Set("provision_state", node.ProvisionState)
-	if err != nil {
-		return []*schema.ResourceData{d}, err
-	}
-	return []*schema.ResourceData{d}, nil
-}
-
-// Update a node's state based on the terraform config - TODO: handle everything.
-func resourceNodeV1Update(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
-	client, err := meta.(*Clients).GetIronicClient()
-	if err != nil {
-		return diag.FromErr(err)
-	}
-
-	d.Partial(true)
-
-	stringFields := []string{
-		"boot_interface",
-		"conductor_group",
-		"console_interface",
-		"deploy_interface",
-		"driver",
-		"inspect_interface",
-		"management_interface",
-		"name",
-		"network_interface",
-		"owner",
-		"power_interface",
-		"raid_interface",
-		"rescue_interface",
-		"resource_class",
-		"storage_interface",
-		"vendor_interface",
-	}
-
-	for _, field := range stringFields {
-		if d.HasChange(field) {
-			opts := nodes.UpdateOpts{
-				nodes.UpdateOperation{
-					Op:    nodes.ReplaceOp,
-					Path:  fmt.Sprintf("/%s", field),
-					Value: d.Get(field).(string),
-				},
-			}
-
-			if _, err := UpdateNode(ctx, client, d.Id(), opts); err != nil {
-				return diag.FromErr(err)
-			}
-		}
-	}
-
-	if d.HasChange("instance_info") && len(d.Get("instance_info").(map[string]any)) > 0 {
-		opts := nodes.UpdateOpts{
-			nodes.UpdateOperation{
-				Op:    nodes.ReplaceOp,
-				Path:  "/instance_info",
-				Value: d.Get("instance_info").(map[string]any),
-			},
-		}
-
-		if _, err := UpdateNode(ctx, client, d.Id(), opts); err != nil {
-			return diag.FromErr(err)
-		}
-	}
-
-	// Make node manageable
-	if (d.HasChange("manage") && d.Get("manage").(bool)) ||
-		(d.HasChange("clean") && d.Get("clean").(bool)) ||
-		(d.HasChange("inspect") && d.Get("inspect").(bool)) {
-		if err := ChangeProvisionStateToTarget(ctx, client, d.Id(), "manage", nil, nil, nil); err != nil {
-			return diag.FromErr(fmt.Errorf("could not manage: %s", err))
-		}
-	}
-
-	// Update power state if required
-	if targetPowerState := d.Get("target_power_state").(string); d.HasChange(
-		"target_power_state",
-	) &&
-		targetPowerState != "" {
-		if diags := changePowerState(ctx, client, d, nodes.TargetPowerState(targetPowerState)); diags.HasError() {
-			return diags
-		}
-	}
-
-	// Clean node
-	if d.HasChange("clean") && d.Get("clean").(bool) {
-		if err := ChangeProvisionStateToTarget(ctx, client, d.Id(), "clean", nil, nil, nil); err != nil {
-			return diag.FromErr(fmt.Errorf("could not clean: %s", err))
-		}
-	}
-
-	// Inspect node
-	if d.HasChange("inspect") && d.Get("inspect").(bool) {
-		if err := ChangeProvisionStateToTarget(ctx, client, d.Id(), "inspect", nil, nil, nil); err != nil {
-			return diag.FromErr(fmt.Errorf("could not inspect: %s", err))
-		}
-	}
-
-	// Make node available
-	if d.HasChange("available") && d.Get("available").(bool) {
-		if err := ChangeProvisionStateToTarget(ctx, client, d.Id(), "provide", nil, nil, nil); err != nil {
-			return diag.FromErr(fmt.Errorf("could not make node available: %s", err))
-		}
-	}
-
-	if d.HasChange("properties") || d.HasChange("root_device") {
-		properties := propertiesMerge(ctx, d, "root_device")
-		opts := nodes.UpdateOpts{
-			nodes.UpdateOperation{
-				Op:    nodes.AddOp,
-				Path:  "/properties",
-				Value: properties,
-			},
-		}
-		if _, err := UpdateNode(ctx, client, d.Id(), opts); err != nil {
-			return diag.FromErr(err)
-		}
-	}
-
-	d.Partial(false)
-
-	return resourceNodeV1Read(ctx, d, meta)
-}
-
-// Delete a node from Ironic.
-func resourceNodeV1Delete(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
-	client, err := meta.(*Clients).GetIronicClient()
-	if err != nil {
-		return diag.FromErr(err)
-	}
-
-	if err := ChangeProvisionStateToTarget(ctx, client, d.Id(), "deleted", nil, nil, nil); err != nil {
-		return diag.FromErr(err)
-	}
-
-	return diag.FromErr(nodes.Delete(ctx, client, d.Id()).ExtractErr())
-}
-
-func propertiesMerge(ctx context.Context, d *schema.ResourceData, key string) map[string]any {
-	properties := d.Get("properties").(map[string]any)
-	properties[key] = d.Get(key).(map[string]any)
-	return properties
-}
-
-// Convert terraform schema to gophercloud CreateOpts
-// TODO: Is there a better way to do this? Annotations?
-func schemaToCreateOpts(ctx context.Context, d *schema.ResourceData) *nodes.CreateOpts {
-	properties := propertiesMerge(ctx, d, "root_device")
-	return &nodes.CreateOpts{
-		BootInterface:       d.Get("boot_interface").(string),
-		ConductorGroup:      d.Get("conductor_group").(string),
-		ConsoleInterface:    d.Get("console_interface").(string),
-		DeployInterface:     d.Get("deploy_interface").(string),
-		Driver:              d.Get("driver").(string),
-		DriverInfo:          d.Get("driver_info").(map[string]any),
-		Extra:               d.Get("extra").(map[string]any),
-		InspectInterface:    d.Get("inspect_interface").(string),
-		ManagementInterface: d.Get("management_interface").(string),
-		Name:                d.Get("name").(string),
-		NetworkInterface:    d.Get("network_interface").(string),
-		Owner:               d.Get("owner").(string),
-		PowerInterface:      d.Get("power_interface").(string),
-		Properties:          properties,
-		RAIDInterface:       d.Get("raid_interface").(string),
-		RescueInterface:     d.Get("rescue_interface").(string),
-		ResourceClass:       d.Get("resource_class").(string),
-		StorageInterface:    d.Get("storage_interface").(string),
-		VendorInterface:     d.Get("vendor_interface").(string),
-	}
-}
-
-// UpdateNode wraps gophercloud's update function, so we are able to retry on 409 when Ironic is busy.
-func UpdateNode(
-	ctx context.Context,
-	client *gophercloud.ServiceClient,
-	uuid string,
-	opts nodes.UpdateOpts,
-) (node *nodes.Node, err error) {
-	interval := 5 * time.Second
-	for range 5 {
-		node, err = nodes.Update(ctx, client, uuid, opts).Extract()
-		if err != nil {
-			if gophercloud.ResponseCodeIs(err, http.StatusConflict) {
-				log.Printf(
-					"[DEBUG] Failed to update node: ironic is busy, will try again in %s",
-					interval.String(),
-				)
-				time.Sleep(interval)
-				interval *= 2
-				continue
-			}
-		} else {
-			break
-		}
-	}
-
-	return
-}
-
-// Call Ironic's API and change the power state of the node.
-func changePowerState(
-	ctx context.Context,
-	client *gophercloud.ServiceClient,
-	d *schema.ResourceData,
-	target nodes.TargetPowerState,
-) diag.Diagnostics {
-	opts := nodes.PowerStateOpts{
-		Target: target,
-	}
-
-	timeout := d.Get("power_state_timeout").(int)
-	if timeout != 0 {
-		opts.Timeout = timeout
-	} else {
-		timeout = 300 // used below for how long to wait for Ironic to finish
-	}
-
-	interval := 5 * time.Second
-	for retries := 0; retries < 5; retries++ {
-		err := nodes.ChangePowerState(ctx, client, d.Id(), opts).ExtractErr()
-		if err != nil {
-			if gophercloud.ResponseCodeIs(err, http.StatusConflict) {
-				log.Printf(
-					"[DEBUG] Failed to change power state: ironic is busy, will try again in %s",
-					interval.String(),
-				)
-				time.Sleep(interval)
-				interval *= 2
-				continue
-			}
-		}
-	}
-
-	// Wait for target_power_state to be empty, i.e. Ironic thinks it's finished
-	checkInterval := 5
-
-	for {
-		node, err := nodes.Get(ctx, client, d.Id()).Extract()
-		if err != nil {
-			return diag.FromErr(err)
-		}
-
-		if node.TargetPowerState == "" {
-			break
-		}
-
-		time.Sleep(time.Duration(checkInterval) * time.Second)
-		timeout -= checkInterval
-		if timeout <= 0 {
-			return diag.FromErr(fmt.Errorf("timed out waiting for power state change"))
-		}
-	}
-
-	return nil
-}
-
-// setRAIDConfig calls ironic's API to send request to change a Node's RAID config.
-func setRAIDConfig(
-	ctx context.Context,
-	client *gophercloud.ServiceClient,
-	d *schema.ResourceData,
-) (err error) {
-	var logicalDisks []nodes.LogicalDisk
-	var targetRAID *metal3v1alpha1.RAIDConfig
-
-	raidConfig := d.Get("raid_config").(string)
-	if raidConfig == "" {
-		return nil
-	}
-
-	err = json.Unmarshal([]byte(raidConfig), &targetRAID)
-	if err != nil {
-		return
-	}
-
-	_, err = ironic.CheckRAIDInterface(d.Get("raid_interface").(string), targetRAID, nil)
-	if err != nil {
-		return
-	}
-
-	// Build target for RAID configuration steps
-	logicalDisks, err = ironic.BuildTargetRAIDCfg(targetRAID)
-	if len(logicalDisks) == 0 || err != nil {
-		return
-	}
-
-	// Set root volume
-	if len(d.Get("root_device").(map[string]any)) == 0 {
-		logicalDisks[0].IsRootVolume = new(bool)
-		*logicalDisks[0].IsRootVolume = true
-	} else {
-		log.Printf("rootDeviceHints is used, the first volume of raid will not be set to root")
-	}
-
-	// Set target for RAID configuration steps
-	return nodes.SetRAIDConfig(
-		ctx,
-		client,
-		d.Id(),
-		nodes.RAIDConfigOpts{LogicalDisks: logicalDisks},
-	).ExtractErr()
-}
-
-// buildManualCleaningSteps builds the clean steps for RAID and BIOS configuration.
-func buildManualCleaningSteps(
-	raidInterface, raidConfig, biosSetings string,
-) (cleanSteps []nodes.CleanStep, err error) {
-	var targetRAID *metal3v1alpha1.RAIDConfig
-	var settings []map[string]string
-
-	if raidConfig != "" {
-		if err = json.Unmarshal([]byte(raidConfig), &targetRAID); err != nil {
-			return nil, err
-		}
-
-		// Build raid clean steps
-		raidCleanSteps, err := ironic.BuildRAIDCleanSteps(raidInterface, targetRAID, nil)
-		if err != nil {
-			return nil, err
-		}
-		cleanSteps = append(cleanSteps, raidCleanSteps...)
-	}
-
-	if biosSetings != "" {
-		if err = json.Unmarshal([]byte(biosSetings), &settings); err != nil {
-			return nil, err
-		}
-
-		cleanSteps = append(
-			cleanSteps,
-			nodes.CleanStep{
-				Interface: "bios",
-				Step:      "apply_configuration",
-				Args: map[string]any{
-					"settings": settings,
-				},
-			},
+		resp.Diagnostics.AddError(
+			"Unexpected Resource Configure Type",
+			fmt.Sprintf(
+				"Expected *Clients, got: %T. Please report this issue to the provider developers.",
+				req.ProviderData,
+			),
 		)
+		return
 	}
 
-	return
+	r.clients = clients
 }
 
-func cleanProperties(nodeProperties map[string]any) map[string]any {
-	// Clean up the properties map to remove any sensitive data
-	properties := make(map[string]any)
-	for k, v := range nodeProperties {
-		switch typedValue := v.(type) {
-		case string:
-			properties[k] = typedValue
-		case bool:
-			properties[k] = strconv.FormatBool(typedValue)
-		case int:
-			properties[k] = strconv.FormatInt(int64(typedValue), 10)
-		case int32:
-			properties[k] = strconv.FormatInt(int64(typedValue), 10)
-		case int64:
-			properties[k] = strconv.FormatInt(typedValue, 10)
-		case float32:
-			properties[k] = strconv.FormatFloat(float64(typedValue), 'f', -1, 32)
-		case float64:
-			properties[k] = strconv.FormatFloat(typedValue, 'f', -1, 64)
-		case map[string]any:
-			properties[k] = typedValue
-		default:
-			properties[k] = fmt.Sprintf("%v", v)
+func (r *nodeV1Resource) Create(
+	ctx context.Context,
+	req resource.CreateRequest,
+	resp *resource.CreateResponse,
+) {
+	var plan nodeV1ResourceModel
+
+	// Get the plan
+	diags := req.Plan.Get(ctx, &plan)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Prepare create options
+	createOpts := nodes.CreateOpts{
+		Driver: plan.Driver.ValueString(),
+	}
+
+	// Set optional fields
+	if !plan.Name.IsNull() && !plan.Name.IsUnknown() {
+		createOpts.Name = plan.Name.ValueString()
+	}
+
+	if !plan.NetworkInterface.IsNull() && !plan.NetworkInterface.IsUnknown() {
+		createOpts.NetworkInterface = plan.NetworkInterface.ValueString()
+	}
+
+	if !plan.BootInterface.IsNull() && !plan.BootInterface.IsUnknown() {
+		createOpts.BootInterface = plan.BootInterface.ValueString()
+	}
+
+	if !plan.ConsoleInterface.IsNull() && !plan.ConsoleInterface.IsUnknown() {
+		createOpts.ConsoleInterface = plan.ConsoleInterface.ValueString()
+	}
+
+	if !plan.DeployInterface.IsNull() && !plan.DeployInterface.IsUnknown() {
+		createOpts.DeployInterface = plan.DeployInterface.ValueString()
+	}
+
+	if !plan.InspectInterface.IsNull() && !plan.InspectInterface.IsUnknown() {
+		createOpts.InspectInterface = plan.InspectInterface.ValueString()
+	}
+
+	if !plan.ManagementInterface.IsNull() && !plan.ManagementInterface.IsUnknown() {
+		createOpts.ManagementInterface = plan.ManagementInterface.ValueString()
+	}
+
+	if !plan.PowerInterface.IsNull() && !plan.PowerInterface.IsUnknown() {
+		createOpts.PowerInterface = plan.PowerInterface.ValueString()
+	}
+
+	if !plan.RAIDInterface.IsNull() && !plan.RAIDInterface.IsUnknown() {
+		createOpts.RAIDInterface = plan.RAIDInterface.ValueString()
+	}
+
+	if !plan.RescueInterface.IsNull() && !plan.RescueInterface.IsUnknown() {
+		createOpts.RescueInterface = plan.RescueInterface.ValueString()
+	}
+
+	if !plan.StorageInterface.IsNull() && !plan.StorageInterface.IsUnknown() {
+		createOpts.StorageInterface = plan.StorageInterface.ValueString()
+	}
+
+	if !plan.VendorInterface.IsNull() && !plan.VendorInterface.IsUnknown() {
+		createOpts.VendorInterface = plan.VendorInterface.ValueString()
+	}
+
+	if !plan.BIOSInterface.IsNull() && !plan.BIOSInterface.IsUnknown() {
+		createOpts.BIOSInterface = plan.BIOSInterface.ValueString()
+	}
+
+	if !plan.FirmwareInterface.IsNull() && !plan.FirmwareInterface.IsUnknown() {
+		createOpts.FirmwareInterface = plan.FirmwareInterface.ValueString()
+	}
+
+	// Handle maps
+	if !plan.Properties.IsNull() && !plan.Properties.IsUnknown() {
+		if properties, err := util.DynamicToMap(ctx, plan.Properties); err != nil {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("driver_info"),
+				"Error Converting Driver Info",
+				fmt.Sprintf("Could not convert driver_info to map: %s", err),
+			)
+		} else {
+			createOpts.Properties = properties
 		}
 	}
-	return properties
+
+	if !plan.DriverInfo.IsNull() && !plan.DriverInfo.IsUnknown() {
+		if driverInfo, err := util.DynamicToMap(ctx, plan.DriverInfo); err != nil {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("driver_info"),
+				"Error Converting Driver Info",
+				fmt.Sprintf("Could not convert driver_info to map: %s", err),
+			)
+		} else {
+			createOpts.DriverInfo = driverInfo
+		}
+	}
+
+	if !plan.ExtraData.IsNull() && !plan.ExtraData.IsUnknown() {
+		if extra, err := util.DynamicToMap(ctx, plan.Properties); err != nil {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("extra"),
+				"Error Converting Extra Data",
+				fmt.Sprintf("Could not convert extra to map: %s", err),
+			)
+		} else {
+			createOpts.Extra = extra
+		}
+	}
+
+	// Handle other optional fields supported by CreateOpts
+	if !plan.ResourceClass.IsNull() && !plan.ResourceClass.IsUnknown() {
+		createOpts.ResourceClass = plan.ResourceClass.ValueString()
+	}
+
+	if !plan.Owner.IsNull() && !plan.Owner.IsUnknown() {
+		createOpts.Owner = plan.Owner.ValueString()
+	}
+
+	if !plan.ConductorGroup.IsNull() && !plan.ConductorGroup.IsUnknown() {
+		createOpts.ConductorGroup = plan.ConductorGroup.ValueString()
+	}
+
+	// Handle boolean fields
+	if !plan.Automated.IsNull() && !plan.Automated.IsUnknown() {
+		automated := plan.Automated.ValueBool()
+		createOpts.AutomatedClean = &automated
+	}
+
+	// Get the ironic client
+	client, err := r.clients.GetIronicClient()
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error getting Ironic client",
+			fmt.Sprintf("Could not get Ironic client: %s", err),
+		)
+		return
+	}
+
+	// Create the node
+	node, err := nodes.Create(ctx, client, createOpts).Extract()
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error creating node",
+			fmt.Sprintf("Could not create node: %s", err),
+		)
+		return
+	}
+
+	// Update plan with computed values
+	plan.ID = types.StringValue(node.UUID)
+
+	// Read the created node to get all computed fields
+	r.readNodeData(ctx, &plan, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Handle action attributes
+	r.handleActionAttributes(ctx, &plan, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Set state
+	diags = resp.State.Set(ctx, plan)
+	resp.Diagnostics.Append(diags...)
+}
+
+func (r *nodeV1Resource) Read(
+	ctx context.Context,
+	req resource.ReadRequest,
+	resp *resource.ReadResponse,
+) {
+	var state nodeV1ResourceModel
+
+	// Get current state
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if state.Available.IsNull() || state.Available.IsUnknown() {
+		state.Available = types.BoolValue(DefaultAvailable)
+	}
+
+	if state.Manage.IsNull() || state.Manage.IsUnknown() {
+		state.Manage = types.BoolValue(DefaultManage)
+	}
+
+	if state.Inspect.IsNull() || state.Inspect.IsUnknown() {
+		state.Inspect = types.BoolValue(DefaultInspect)
+	}
+
+	if state.Clean.IsNull() || state.Clean.IsUnknown() {
+		state.Clean = types.BoolValue(DefaultClean)
+	}
+
+	// Read the node from the API
+	r.readNodeData(ctx, &state, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Set refreshed state
+	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
+}
+
+func (r *nodeV1Resource) Update(
+	ctx context.Context,
+	req resource.UpdateRequest,
+	resp *resource.UpdateResponse,
+) {
+	var plan nodeV1ResourceModel
+	var state nodeV1ResourceModel
+
+	// Get plan and current state
+	diags := req.Plan.Get(ctx, &plan)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	diags = req.State.Get(ctx, &state)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Prepare update options
+	updateOpts := nodes.UpdateOpts{}
+
+	// Check for changes and build update operations
+	if !plan.Name.Equal(state.Name) {
+		updateOpts = append(updateOpts, nodes.UpdateOperation{
+			Op:    nodes.ReplaceOp,
+			Path:  "/name",
+			Value: plan.Name.ValueString(),
+		})
+	}
+
+	// Add other update operations as needed...
+	// This is a simplified version - you would need to handle all updatable fields
+
+	if len(updateOpts) > 0 {
+		// Get the ironic client
+		client, err := r.clients.GetIronicClient()
+		if err != nil {
+			resp.Diagnostics.AddError(
+				"Error getting Ironic client",
+				fmt.Sprintf("Could not get Ironic client: %s", err),
+			)
+			return
+		}
+
+		// Perform the update
+		_, err = nodes.Update(ctx, client, state.ID.ValueString(), updateOpts).Extract()
+		if err != nil {
+			resp.Diagnostics.AddError(
+				"Error updating node",
+				fmt.Sprintf("Could not update node %s: %s", state.ID.ValueString(), err),
+			)
+			return
+		}
+	}
+
+	// Read the updated node
+	r.readNodeData(ctx, &plan, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Handle action attributes
+	r.handleActionAttributes(ctx, &plan, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Set updated state
+	diags = resp.State.Set(ctx, plan)
+	resp.Diagnostics.Append(diags...)
+}
+
+func (r *nodeV1Resource) Delete(
+	ctx context.Context,
+	req resource.DeleteRequest,
+	resp *resource.DeleteResponse,
+) {
+	var state nodeV1ResourceModel
+
+	// Get current state
+	diags := req.State.Get(ctx, &state)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Delete the node
+	client, err := r.clients.GetIronicClient()
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error getting Ironic client",
+			fmt.Sprintf("Could not get Ironic client: %s", err),
+		)
+		return
+	}
+
+	err = nodes.Delete(ctx, client, state.ID.ValueString()).ExtractErr()
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error deleting node",
+			fmt.Sprintf("Could not delete node %s: %s", state.ID.ValueString(), err),
+		)
+		return
+	}
+}
+
+func (r *nodeV1Resource) ImportState(
+	ctx context.Context,
+	req resource.ImportStateRequest,
+	resp *resource.ImportStateResponse,
+) {
+	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+}
+
+// Helper function to read node data from the API and populate the model.
+func (r *nodeV1Resource) readNodeData(
+	ctx context.Context,
+	model *nodeV1ResourceModel,
+	diagnostics *diag.Diagnostics,
+) {
+	client, err := r.clients.GetIronicClient()
+	if err != nil {
+		diagnostics.AddError(
+			"Error getting Ironic client",
+			fmt.Sprintf("Could not get Ironic client: %s", err),
+		)
+		return
+	}
+
+	node, err := nodes.Get(ctx, client, model.ID.ValueString()).Extract()
+	if err != nil {
+		diagnostics.AddError(
+			"Error reading node",
+			fmt.Sprintf("Could not read node %s: %s", model.ID.ValueString(), err),
+		)
+		return
+	}
+
+	// Map the API response to the model
+	model.ID = types.StringValue(node.UUID)
+	model.Name = types.StringValue(node.Name)
+	model.Driver = types.StringValue(node.Driver)
+	model.NetworkInterface = types.StringValue(node.NetworkInterface)
+	model.BootInterface = types.StringValue(node.BootInterface)
+	model.ConsoleInterface = types.StringValue(node.ConsoleInterface)
+	model.DeployInterface = types.StringValue(node.DeployInterface)
+	model.InspectInterface = types.StringValue(node.InspectInterface)
+	model.ManagementInterface = types.StringValue(node.ManagementInterface)
+	model.PowerInterface = types.StringValue(node.PowerInterface)
+	model.RAIDInterface = types.StringValue(node.RAIDInterface)
+	model.RescueInterface = types.StringValue(node.RescueInterface)
+	model.StorageInterface = types.StringValue(node.StorageInterface)
+	model.VendorInterface = types.StringValue(node.VendorInterface)
+	model.BIOSInterface = types.StringValue(node.BIOSInterface)
+	model.FirmwareInterface = types.StringValue(node.FirmwareInterface)
+
+	model.Automated = types.BoolValue(*node.AutomatedClean)
+	model.Protected = types.BoolValue(node.Protected)
+	model.Maintenance = types.BoolValue(node.Maintenance)
+	model.MaintenanceReason = types.StringValue(node.MaintenanceReason)
+
+	model.InstanceUUID = types.StringValue(node.InstanceUUID)
+	model.ResourceClass = types.StringValue(node.ResourceClass)
+	model.ProvisionState = types.StringValue(node.ProvisionState)
+	model.PowerState = types.StringValue(node.PowerState)
+	model.TargetProvisionState = types.StringValue(node.TargetProvisionState)
+	model.TargetPowerState = types.StringValue(node.TargetPowerState)
+	model.LastError = types.StringValue(node.LastError)
+	model.Owner = types.StringValue(node.Owner)
+	model.Lessee = types.StringValue(node.Lessee)
+	model.Conductor = types.StringValue(node.Conductor)
+	model.ConductorGroup = types.StringValue(node.ConductorGroup)
+	model.AllocationUUID = types.StringValue(node.AllocationUUID)
+	model.Chassis = types.StringValue(node.ChassisUUID)
+	model.Fault = types.StringValue(node.Fault)
+
+	// Handle time fields
+	if !node.CreatedAt.IsZero() {
+		model.Created = timetypes.NewRFC3339TimeValue(node.CreatedAt)
+	} else {
+		model.Created = timetypes.NewRFC3339Null()
+	}
+	if !node.UpdatedAt.IsZero() {
+		model.Updated = timetypes.NewRFC3339TimeValue(node.UpdatedAt)
+	} else {
+		model.Updated = timetypes.NewRFC3339Null()
+	}
+	if !node.ProvisionUpdatedAt.IsZero() {
+		model.ProvisionUpdated = timetypes.NewRFC3339TimeValue(node.ProvisionUpdatedAt)
+	} else {
+		model.ProvisionUpdated = timetypes.NewRFC3339Null()
+	}
+	model.InspectionStarted = timetypes.NewRFC3339TimePointerValue(node.InspectionStartedAt)
+	model.InspectionFinished = timetypes.NewRFC3339TimePointerValue(node.InspectionFinishedAt)
+
+	// Handle map fields - this is simplified, you may need more complex handling
+	if node.Properties != nil {
+		if properties, err := util.MapToDynamic(ctx, node.Properties); err != nil {
+			diagnostics.AddAttributeError(
+				path.Root("properties"),
+				"Error Converting Properties",
+				fmt.Sprintf("Could not convert properties to dynamic: %s", err),
+			)
+		} else {
+			model.Properties = properties
+		}
+	} else {
+		model.Properties = types.DynamicNull()
+	}
+
+	if node.DriverInfo != nil {
+		if driverInfo, err := util.MapToDynamic(ctx, node.DriverInfo); err != nil {
+			diagnostics.AddAttributeError(
+				path.Root("driver_info"),
+				"Error Converting Driver Info",
+				fmt.Sprintf("Could not convert driver_info to dynamic: %s", err),
+			)
+		} else {
+			model.DriverInfo = driverInfo
+		}
+	} else {
+		model.DriverInfo = types.DynamicNull()
+	}
+
+	if node.InstanceInfo != nil {
+		instanceInfo, err := util.MapToDynamic(ctx, node.InstanceInfo)
+		if err != nil {
+			diagnostics.AddAttributeError(
+				path.Root("instance_info"),
+				"Error Converting Instance Info",
+				fmt.Sprintf("Could not convert instance_info to dynamic: %s", err),
+			)
+		} else {
+			model.InstanceInfo = instanceInfo
+		}
+	} else {
+		model.InstanceInfo = types.DynamicNull()
+	}
+
+	if len(node.Extra) > 0 {
+		if extra, err := util.MapToDynamic(ctx, node.Extra); err != nil {
+			diagnostics.AddAttributeError(
+				path.Root("extra"),
+				"Error Converting Extra Data",
+				fmt.Sprintf("Could not convert extra to dynamic: %s", err),
+			)
+		} else {
+			model.ExtraData = extra
+		}
+	} else {
+		model.ExtraData = types.DynamicNull()
+	}
+
+	if len(node.CleanStep) > 0 {
+		if cleanStep, err := util.MapToDynamic(ctx, node.CleanStep); err != nil {
+			diagnostics.AddAttributeError(
+				path.Root("clean_step"),
+				"Error Converting Clean Step",
+				fmt.Sprintf("Could not convert clean_step to dynamic: %s", err),
+			)
+		} else {
+			model.CleanStep = cleanStep
+		}
+	} else {
+		model.CleanStep = types.DynamicNull()
+	}
+
+	// Handle other complex fields as needed...
+}
+
+// handleActionAttributes handles the action attributes (clean, inspect, available, manage).
+// These attributes trigger state changes but are not persisted in the API.
+func (r *nodeV1Resource) handleActionAttributes(
+	ctx context.Context,
+	model *nodeV1ResourceModel,
+	diagnostics *diag.Diagnostics,
+) {
+	nodeUUID := model.ID.ValueString()
+
+	// Get the ironic client
+	client, err := r.clients.GetIronicClient()
+	if err != nil {
+		diagnostics.AddError(
+			"Error getting Ironic client",
+			fmt.Sprintf("Could not get Ironic client: %s", err),
+		)
+		return
+	}
+
+	// Handle clean action
+	if !model.Clean.IsNull() && model.Clean.ValueBool() {
+		err := ChangeProvisionStateToTarget(
+			ctx,
+			client,
+			nodeUUID,
+			nodes.TargetClean,
+			nil,
+			nil,
+			nil,
+		)
+		if err != nil {
+			diagnostics.AddError(
+				"Error cleaning node",
+				fmt.Sprintf("Could not clean node %s: %s", nodeUUID, err),
+			)
+			return
+		}
+		// Reset the action attribute to null after triggering
+		model.Clean = types.BoolNull()
+	}
+
+	// Handle inspect action
+	if !model.Inspect.IsNull() && model.Inspect.ValueBool() {
+		err := ChangeProvisionStateToTarget(
+			ctx,
+			client,
+			nodeUUID,
+			nodes.TargetInspect,
+			nil,
+			nil,
+			nil,
+		)
+		if err != nil {
+			diagnostics.AddError(
+				"Error inspecting node",
+				fmt.Sprintf("Could not inspect node %s: %s", nodeUUID, err),
+			)
+			return
+		}
+		// Reset the action attribute to null after triggering
+		model.Inspect = types.BoolNull()
+	}
+
+	// Handle available action
+	if !model.Available.IsNull() && model.Available.ValueBool() {
+		err := ChangeProvisionStateToTarget(
+			ctx,
+			client,
+			nodeUUID,
+			nodes.TargetProvide,
+			nil,
+			nil,
+			nil,
+		)
+		if err != nil {
+			diagnostics.AddError(
+				"Error making node available",
+				fmt.Sprintf("Could not make node %s available: %s", nodeUUID, err),
+			)
+			return
+		}
+		// Reset the action attribute to null after triggering
+		model.Available = types.BoolNull()
+	}
+
+	// Handle manage action
+	if !model.Manage.IsNull() && model.Manage.ValueBool() {
+		err := ChangeProvisionStateToTarget(
+			ctx,
+			client,
+			nodeUUID,
+			nodes.TargetManage,
+			nil,
+			nil,
+			nil,
+		)
+		if err != nil {
+			diagnostics.AddError(
+				"Error managing node",
+				fmt.Sprintf("Could not manage node %s: %s", nodeUUID, err),
+			)
+			return
+		}
+		// Reset the action attribute to null after triggering
+		model.Manage = types.BoolNull()
+	}
 }

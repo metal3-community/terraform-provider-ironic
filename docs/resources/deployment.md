@@ -39,12 +39,12 @@ resource "ironic_deployment" "masters" {
 
 ### Optional
 
-- `deploy_steps` (String) JSON string of deploy steps for the deployment.
-- `fixed_ips` (List of Map of String) Fixed IP addresses for the deployment.
+- `deploy_steps` (Attributes List) JSON string of deploy steps for the deployment. (see [below for nested schema](#nestedatt--deploy_steps))
+- `fixed_ips` (Attributes List) Fixed IP addresses for the deployment. (see [below for nested schema](#nestedatt--fixed_ips))
 - `metadata` (Dynamic) Metadata for the deployment.
 - `name` (String) The name of the deployment.
 - `network_data` (Dynamic) Network data for the deployment.
-- `user_data` (String) User data for the deployment.
+- `user_data` (Dynamic) User data for the deployment.
 - `user_data_url` (String) URL to fetch user data from.
 - `user_data_url_ca_cert` (String) CA certificate for user data URL verification.
 - `user_data_url_headers` (Dynamic) Headers to send when fetching user data URL.
@@ -54,3 +54,24 @@ resource "ironic_deployment" "masters" {
 - `id` (String) The UUID of the deployment (same as node_uuid).
 - `last_error` (String) The last error message from the node.
 - `provision_state` (String) The current provision state of the node.
+
+<a id="nestedatt--deploy_steps"></a>
+### Nested Schema for `deploy_steps`
+
+Required:
+
+- `interface` (String) The interface to use for the deploy step.
+- `step` (String) The name of the deploy step.
+
+Optional:
+
+- `args` (Map of String) Arguments for the deploy step.
+- `priority` (Number) The priority of the deploy step.
+
+
+<a id="nestedatt--fixed_ips"></a>
+### Nested Schema for `fixed_ips`
+
+Required:
+
+- `ip_address` (String) The fixed IP address.

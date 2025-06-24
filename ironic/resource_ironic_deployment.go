@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/appkins-org/terraform-provider-ironic/ironic/util"
@@ -17,7 +16,7 @@ import (
 	utilgc "github.com/gophercloud/utils/openstack/baremetal/v1/nodes"
 	retryablehttp "github.com/hashicorp/go-retryablehttp"
 	"github.com/hashicorp/go-version"
-	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -26,6 +25,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
@@ -42,13 +42,25 @@ type deploymentResource struct {
 	clients *Clients
 }
 
+type fixedIpModel struct {
+	IPAddress types.String `tfsdk:"ip_address"`
+}
+
+type deployStepModel struct {
+	Interface types.String `tfsdk:"interface"`
+	Step      types.String `tfsdk:"step"`
+	Args      types.Map    `tfsdk:"args"`
+	Priority  types.Int64  `tfsdk:"priority"`
+	Tes       []nodes.DeployStep
+}
+
 // deploymentResourceModel describes the resource data model.
 type deploymentResourceModel struct {
 	ID                 types.String  `tfsdk:"id"`
 	Name               types.String  `tfsdk:"name"`
 	NodeUUID           types.String  `tfsdk:"node_uuid"`
 	InstanceInfo       types.Dynamic `tfsdk:"instance_info"`
-	DeploySteps        types.String  `tfsdk:"deploy_steps"`
+	DeploySteps        types.List    `tfsdk:"deploy_steps"`
 	UserData           types.Dynamic `tfsdk:"user_data"`
 	UserDataURL        types.String  `tfsdk:"user_data_url"`
 	UserDataURLCaCert  types.String  `tfsdk:"user_data_url_ca_cert"`
@@ -108,11 +120,43 @@ func (r *deploymentResource) Schema(
 					dynamicplanmodifier.RequiresReplace(),
 				},
 			},
-			"deploy_steps": schema.StringAttribute{
+			"deploy_steps": schema.ListNestedAttribute{
 				MarkdownDescription: "JSON string of deploy steps for the deployment.",
 				Optional:            true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
+				NestedObject: schema.NestedAttributeObject{
+					Attributes: map[string]schema.Attribute{
+						"interface": schema.StringAttribute{
+							MarkdownDescription: "The interface to use for the deploy step.",
+							Required:            true,
+							Validators: []validator.String{
+								stringvalidator.OneOf(
+									string(nodes.InterfaceBIOS),
+									string(nodes.InterfaceDeploy),
+									string(nodes.InterfaceFirmware),
+									string(nodes.InterfaceManagement),
+									string(nodes.InterfacePower),
+									string(nodes.InterfaceRAID),
+								),
+							},
+						},
+						"step": schema.StringAttribute{
+							MarkdownDescription: "The name of the deploy step.",
+							Required:            true,
+						},
+						"args": schema.MapAttribute{
+							MarkdownDescription: "Arguments for the deploy step.",
+							Optional:            true,
+							ElementType:         types.StringType,
+						},
+						"priority": schema.Int64Attribute{
+							MarkdownDescription: "The priority of the deploy step.",
+							Optional:            true,
+							Computed:            true,
+						},
+					},
+				},
+				PlanModifiers: []planmodifier.List{
+					listplanmodifier.UseStateForUnknown(),
 				},
 			},
 			"user_data": schema.DynamicAttribute{
@@ -157,15 +201,17 @@ func (r *deploymentResource) Schema(
 					dynamicplanmodifier.RequiresReplace(),
 				},
 			},
-			"fixed_ips": schema.ListAttribute{
+			"fixed_ips": schema.ListNestedAttribute{
 				MarkdownDescription: "Fixed IP addresses for the deployment.",
-				ElementType: types.MapType{
-					ElemType: types.StringType,
+				NestedObject: schema.NestedAttributeObject{
+					Attributes: map[string]schema.Attribute{
+						"ip_address": schema.StringAttribute{
+							MarkdownDescription: "The fixed IP address.",
+							Required:            true,
+						},
+					},
 				},
 				Optional: true,
-				PlanModifiers: []planmodifier.List{
-					listplanmodifier.RequiresReplace(),
-				},
 			},
 			"provision_state": schema.StringAttribute{
 				MarkdownDescription: "The current provision state of the node.",
@@ -231,98 +277,60 @@ func (r *deploymentResource) Create(
 		"node_uuid": nodeUUID,
 	})
 
-	// Set instance info
-	if !model.InstanceInfo.IsNull() && !model.InstanceInfo.IsUnknown() {
-		instanceInfoMap, err := util.DynamicToStringMap(ctx, model.InstanceInfo)
-		if err != nil {
+	node, err := nodes.Get(ctx, client, nodeUUID).Extract()
+	if err != nil {
+		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			resp.Diagnostics.AddError(
-				"Error converting instance info",
-				fmt.Sprintf("Could not convert instance info: %s", err),
+				"Node not found",
+				fmt.Sprintf("Node with UUID %s was not found. Please ensure the node exists.",
+					nodeUUID,
+				),
 			)
 			return
 		}
-
-		if instanceInfoMap != nil {
-			instanceInfoCapabilities, found := instanceInfoMap["capabilities"]
-			capabilities := make(map[string]string)
-			if found {
-				for _, e := range strings.Split(instanceInfoCapabilities, ",") {
-					parts := strings.Split(e, ":")
-					if len(parts) != 2 {
-						resp.Diagnostics.AddError(
-							"Error parsing capabilities",
-							fmt.Sprintf(
-								"Error while parsing capabilities: %s, the correct format is key:value",
-								e,
-							),
-						)
-						return
-					}
-					capabilities[parts[0]] = parts[1]
-				}
-				delete(instanceInfoMap, "capabilities")
-			}
-			delete(instanceInfoMap, "fixed_ips")
-
-			// Convert the map to interface{} for the update operation
-			instanceInfoInterface := make(map[string]any)
-			for k, v := range instanceInfoMap {
-				instanceInfoInterface[k] = v
-			}
-
-			_, err := UpdateNode(ctx, client, nodeUUID, nodes.UpdateOpts{
-				nodes.UpdateOperation{
-					Op:    nodes.AddOp,
-					Path:  "/instance_info",
-					Value: instanceInfoInterface,
-				},
-			})
-			if err != nil {
-				resp.Diagnostics.AddError(
-					"Error updating instance info",
-					fmt.Sprintf("Could not update instance info: %s", err),
-				)
-				return
-			}
-
-			if len(capabilities) != 0 {
-				_, err = UpdateNode(ctx, client, nodeUUID, nodes.UpdateOpts{
-					nodes.UpdateOperation{
-						Op:    nodes.AddOp,
-						Path:  "/instance_info/capabilities",
-						Value: capabilities,
-					},
-				})
-				if err != nil {
-					resp.Diagnostics.AddError(
-						"Error updating instance info capabilities",
-						fmt.Sprintf("Could not update instance info capabilities: %s", err),
-					)
-					return
-				}
-			}
-		}
+		resp.Diagnostics.AddError(
+			"Error getting node",
+			fmt.Sprintf("Could not get node %s: %s", nodeUUID, err),
+		)
+		return
 	}
+
+	// Prepare update options
+	updateOpts := nodes.UpdateOpts{}
 
 	// Handle deploy_steps if present
 	var deploySteps []nodes.DeployStep
 	if !model.DeploySteps.IsNull() && !model.DeploySteps.IsUnknown() {
-		dSteps := model.DeploySteps.ValueString()
-		if len(dSteps) > 0 {
-			deploySteps, err = buildDeploySteps(dSteps)
-			if err != nil {
-				resp.Diagnostics.AddError(
-					"Error parsing deploy steps",
-					fmt.Sprintf("Could not parse deploy steps: %s", err),
-				)
-				return
-			}
+		var dSteps []deployStepModel
+		resp.Diagnostics.Append(model.DeploySteps.ElementsAs(ctx, &dSteps, false)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		resp.Diagnostics.Append(buildDeploySteps(ctx, dSteps, &deploySteps)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		if len(deploySteps) > 0 {
+			updateOpts = append(updateOpts, nodes.UpdateOperation{
+				Op:    nodes.AddOp,
+				Path:  "/deploy_steps",
+				Value: deploySteps,
+			})
 		}
 	}
 
+	util.AddDynamicUpdateOptForFieldWithMap(
+		ctx,
+		&updateOpts,
+		&resp.Diagnostics,
+		model.InstanceInfo,
+		node.InstanceInfo,
+		"instance_info",
+	)
+
 	// Handle fixed_ips if present
 	if !model.FixedIPs.IsNull() && !model.FixedIPs.IsUnknown() {
-		var fixedIPs []attr.Value
+		var fixedIPs []fixedIpModel
 		resp.Diagnostics.Append(model.FixedIPs.ElementsAs(ctx, &fixedIPs, false)...)
 		if resp.Diagnostics.HasError() {
 			return
@@ -332,24 +340,18 @@ func (r *deploymentResource) Create(
 			// Convert to interface{} slice for the update operation
 			fixedIPsInterface := make([]any, len(fixedIPs))
 			for i, ip := range fixedIPs {
-				if mapVal, ok := ip.(types.Map); ok {
-					ipMap := make(map[string]any)
-					for k, v := range mapVal.Elements() {
-						if strVal, ok := v.(types.String); ok {
-							ipMap[k] = strVal.ValueString()
-						}
-					}
-					fixedIPsInterface[i] = ipMap
-				}
+				ipMap := make(map[string]any)
+				ipMap["ip_address"] = ip.IPAddress.ValueString()
+				fixedIPsInterface[i] = ipMap
 			}
 
-			_, err = UpdateNode(ctx, client, nodeUUID, nodes.UpdateOpts{
-				nodes.UpdateOperation{
-					Op:    nodes.AddOp,
-					Path:  "/instance_info/fixed_ips",
-					Value: fixedIPsInterface,
-				},
+			updateOpts = append(updateOpts, nodes.UpdateOperation{
+				Op:    nodes.AddOp,
+				Path:  "/instance_info/fixed_ips",
+				Value: fixedIPsInterface,
 			})
+
+			_, err = UpdateNode(ctx, client, nodeUUID, updateOpts)
 			if err != nil {
 				resp.Diagnostics.AddError(
 					"Error updating fixed_ips",
@@ -708,18 +710,36 @@ func fetchFullIgnition(
 }
 
 // buildDeploySteps handles customized deploy steps.
-func buildDeploySteps(steps string) ([]nodes.DeployStep, error) {
-	var deploySteps []nodes.DeployStep
-	err := json.Unmarshal([]byte(steps), &deploySteps)
-	if err != nil {
-		tflog.Error(context.Background(), "could not unmarshal deploy_steps", map[string]any{
-			"steps": steps,
-			"error": err.Error(),
-		})
-		return nil, err
+func buildDeploySteps(
+	ctx context.Context,
+	dSteps []deployStepModel,
+	deploySteps *[]nodes.DeployStep,
+) diag.Diagnostics {
+	diags := diag.Diagnostics{}
+	// Convert deploy steps to nodes.DeployStep
+	if len(dSteps) == 0 {
+		diags.AddWarning(
+			"Empty deploy_steps",
+			"Deploy steps are empty. No deploy steps will be applied.",
+		)
+		return diags
 	}
-
-	return deploySteps, nil
+	// Build deploy steps from the model
+	dStepsN := make([]nodes.DeployStep, len(dSteps))
+	for i, step := range dSteps {
+		deployStep := nodes.DeployStep{
+			Interface: nodes.StepInterface(step.Interface.ValueString()),
+			Step:      step.Step.ValueString(),
+			Priority:  int(step.Priority.ValueInt64()),
+		}
+		diags.Append(step.Args.ElementsAs(ctx, &deployStep.Args, false)...)
+		if diags.HasError() {
+			return diags
+		}
+		dStepsN[i] = deployStep
+	}
+	*deploySteps = dStepsN
+	return diags
 }
 
 func convertNetworkData(networkData map[string]any) (map[string]any, error) {

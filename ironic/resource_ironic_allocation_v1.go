@@ -9,6 +9,8 @@ import (
 	"github.com/appkins-org/terraform-provider-ironic/ironic/util"
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/v1/allocations"
+	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -18,6 +20,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
@@ -40,6 +43,7 @@ type allocationV1ResourceModel struct {
 	Name           types.String  `tfsdk:"name"`
 	ResourceClass  types.String  `tfsdk:"resource_class"`
 	CandidateNodes types.List    `tfsdk:"candidate_nodes"`
+	Node           types.String  `tfsdk:"node"`
 	Traits         types.List    `tfsdk:"traits"`
 	Extra          types.Dynamic `tfsdk:"extra"`
 	NodeUUID       types.String  `tfsdk:"node_uuid"`
@@ -70,32 +74,37 @@ func (r *allocationV1Resource) Schema(
 			"id": schema.StringAttribute{
 				MarkdownDescription: "The UUID of the allocation.",
 				Computed:            true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"name": schema.StringAttribute{
 				MarkdownDescription: "The name of the allocation.",
 				Optional:            true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
 			},
 			"resource_class": schema.StringAttribute{
 				MarkdownDescription: "The resource class required for this allocation.",
 				Required:            true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
 			},
 			"candidate_nodes": schema.ListAttribute{
 				MarkdownDescription: "List of candidate node UUIDs for this allocation.",
 				ElementType:         types.StringType,
 				Optional:            true,
 				Computed:            true,
+				Validators: []validator.List{
+					listvalidator.ConflictsWith(path.MatchRoot("node")),
+				},
 				PlanModifiers: []planmodifier.List{
 					listplanmodifier.RequiresReplace(),
-					listplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"node": schema.StringAttribute{
+				MarkdownDescription: `Backfill this allocation from the provided node that has already been deployed. 
+				Bypasses the normal allocation process. Conflicts with "candidate_nodes".`,
+				Optional: true,
+				Computed: true,
+				Validators: []validator.String{
+					stringvalidator.ConflictsWith(path.MatchRoot("candidate_nodes")),
+				},
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
 				},
 			},
 			"traits": schema.ListAttribute{
@@ -116,23 +125,14 @@ func (r *allocationV1Resource) Schema(
 			"node_uuid": schema.StringAttribute{
 				MarkdownDescription: "The UUID of the node allocated to this allocation.",
 				Computed:            true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"state": schema.StringAttribute{
 				MarkdownDescription: "The current state of the allocation.",
 				Computed:            true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"last_error": schema.StringAttribute{
 				MarkdownDescription: "The last error message for the allocation.",
 				Computed:            true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
 			},
 		},
 	}
@@ -205,6 +205,64 @@ func (r *allocationV1Resource) Create(
 			return
 		}
 		createOpts.CandidateNodes = candidateNodes
+	}
+
+	if !plan.Node.IsNull() && !plan.Node.IsUnknown() {
+		// If a node is specified, it must be a single UUID
+		if plan.CandidateNodes.IsNull() || plan.CandidateNodes.IsUnknown() ||
+			len(plan.CandidateNodes.Elements()) == 0 {
+			backfillOpts := struct {
+				*allocations.CreateOpts
+				Node string `json:"node"`
+			}{
+				&createOpts,
+				plan.Node.ValueString(),
+			}
+			reqBody, err := gophercloud.BuildRequestBody(backfillOpts, "")
+			if err != nil {
+				resp.Diagnostics.AddAttributeError(
+					path.Root("node"),
+					"Error Building Request Body",
+					fmt.Sprintf("Could not build request body for node backfill: %s", err),
+				)
+				return
+			}
+			res, err := client.Post(ctx, client.ServiceURL("allocations"), reqBody, &reqBody, nil)
+			_, _, err = gophercloud.ParseResponse(res, err)
+			if err != nil {
+				resp.Diagnostics.AddError(
+					"Error creating allocation with node backfill",
+					fmt.Sprintf("Could not create allocation with node backfill: %s", err),
+				)
+				return
+			}
+		} else {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("node"),
+				"Node Conflicts with Candidate Nodes",
+				"Cannot specify both 'node' and 'candidate_nodes'. Please choose one.",
+			)
+			return
+		}
+	} else if !plan.CandidateNodes.IsNull() && !plan.CandidateNodes.IsUnknown() {
+		// If candidate nodes are specified, ensure they are not empty
+		if len(plan.CandidateNodes.Elements()) == 0 {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("candidate_nodes"),
+				"Empty Candidate Nodes List",
+				"Candidate nodes list cannot be empty. Please provide at least one candidate node UUID.",
+			)
+			return
+		}
+		// If candidate nodes are provided, we don't set NodeUUID
+	} else {
+		// If neither candidate nodes nor node is specified, we cannot create the allocation
+		resp.Diagnostics.AddAttributeError(
+			path.Root("candidate_nodes"),
+			"Missing Candidate Nodes or Node",
+			"At least one of 'candidate_nodes' or 'node' must be specified to create an allocation.",
+		)
+		return
 	}
 
 	// Handle traits list
@@ -280,10 +338,7 @@ func (r *allocationV1Resource) Read(
 	if resp.Diagnostics.HasError() {
 		return
 	}
-
-	// Set refreshed state
-	diags = resp.State.Set(ctx, state)
-	resp.Diagnostics.Append(diags...)
+	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 }
 
 func (r *allocationV1Resource) Update(
@@ -354,19 +409,6 @@ func (r *allocationV1Resource) ImportState(
 ) {
 	// Set the id attribute to the import identifier
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
-
-	// Read the allocation data
-	var state allocationV1ResourceModel
-	state.ID = types.StringValue(req.ID)
-
-	r.readAllocationData(ctx, &state, &resp.Diagnostics)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	// Set state
-	diags := resp.State.Set(ctx, state)
-	resp.Diagnostics.Append(diags...)
 }
 
 // Helper function to wait for allocation completion.
@@ -444,9 +486,9 @@ func (r *allocationV1Resource) readAllocationData(
 
 	// Handle candidate nodes list
 	if len(allocation.CandidateNodes) > 0 {
-		candidateNodesValues := make([]attr.Value, len(allocation.CandidateNodes))
-		for i, node := range allocation.CandidateNodes {
-			candidateNodesValues[i] = types.StringValue(node)
+		var candidateNodesValues []attr.Value
+		for _, node := range allocation.CandidateNodes {
+			candidateNodesValues = append(candidateNodesValues, types.StringValue(node))
 		}
 		candidateNodesList, diags := types.ListValue(types.StringType, candidateNodesValues)
 		diagnostics.Append(diags...)

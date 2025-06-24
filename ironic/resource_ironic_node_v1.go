@@ -3,6 +3,7 @@ package ironic
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -21,10 +22,11 @@ import (
 )
 
 const (
-	DefaultAvailable = true
-	DefaultManage    = true
-	DefaultInspect   = true
-	DefaultClean     = false
+	DefaultAvailable   = true
+	DefaultManage      = true
+	DefaultInspect     = true
+	DefaultClean       = false
+	DefaultMaintenance = false
 )
 
 // Ensure the implementation satisfies the expected interfaces.
@@ -254,17 +256,11 @@ func (r *nodeV1Resource) Schema(
 			},
 			"maintenance": schema.BoolAttribute{
 				MarkdownDescription: "Indicates whether the node is in maintenance mode.",
-				Optional:            true,
 				Computed:            true,
-				Default:             booldefault.StaticBool(false),
 			},
 			"maintenance_reason": schema.StringAttribute{
 				MarkdownDescription: "The reason for putting the node in maintenance mode.",
-				Optional:            true,
 				Computed:            true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"properties": schema.DynamicAttribute{
 				MarkdownDescription: "The properties of the node.",
@@ -398,25 +394,16 @@ func (r *nodeV1Resource) Schema(
 				MarkdownDescription: "The timestamp when the node was created.",
 				CustomType:          timetypes.RFC3339Type{},
 				Computed:            true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"updated_at": schema.StringAttribute{
 				MarkdownDescription: "The timestamp when the node was last updated.",
 				CustomType:          timetypes.RFC3339Type{},
 				Computed:            true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"inspection_started_at": schema.StringAttribute{
 				MarkdownDescription: "The timestamp when the node inspection started.",
 				CustomType:          timetypes.RFC3339Type{},
 				Computed:            true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"inspection_finished_at": schema.StringAttribute{
 				MarkdownDescription: "The timestamp when the node inspection finished.",
@@ -430,9 +417,6 @@ func (r *nodeV1Resource) Schema(
 				MarkdownDescription: "The timestamp when the node provision was last updated.",
 				CustomType:          timetypes.RFC3339Type{},
 				Computed:            true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"clean_step": schema.DynamicAttribute{
 				MarkdownDescription: "The current clean step for the node.",
@@ -626,9 +610,9 @@ func (r *nodeV1Resource) Create(
 	if !plan.Properties.IsNull() && !plan.Properties.IsUnknown() {
 		if properties, err := util.DynamicToMap(ctx, plan.Properties); err != nil {
 			resp.Diagnostics.AddAttributeError(
-				path.Root("driver_info"),
-				"Error Converting Driver Info",
-				fmt.Sprintf("Could not convert driver_info to map: %s", err),
+				path.Root("properties"),
+				"Error Converting Properties",
+				fmt.Sprintf("Could not convert properties to map: %s", err),
 			)
 		} else {
 			createOpts.Properties = properties
@@ -707,6 +691,10 @@ func (r *nodeV1Resource) Create(
 		return
 	}
 
+	// Set state
+	diags = resp.State.Set(ctx, plan)
+	resp.Diagnostics.Append(diags...)
+
 	// Handle action attributes
 	r.handleActionAttributes(ctx, &plan, &resp.Diagnostics)
 	if resp.Diagnostics.HasError() {
@@ -739,12 +727,28 @@ func (r *nodeV1Resource) Read(
 		state.Manage = types.BoolValue(DefaultManage)
 	}
 
+	if state.Maintenance.IsNull() || state.Maintenance.IsUnknown() {
+		state.Maintenance = types.BoolValue(false)
+	}
+
 	if state.Inspect.IsNull() || state.Inspect.IsUnknown() {
 		state.Inspect = types.BoolValue(DefaultInspect)
 	}
 
 	if state.Clean.IsNull() || state.Clean.IsUnknown() {
 		state.Clean = types.BoolValue(DefaultClean)
+	}
+
+	if state.CleanStep.IsNull() || state.CleanStep.IsUnknown() {
+		state.CleanStep = types.DynamicNull()
+	}
+
+	if state.DeployStep.IsNull() || state.DeployStep.IsUnknown() {
+		state.DeployStep = types.DynamicNull()
+	}
+
+	if state.ResourceClass.IsNull() || state.ResourceClass.IsUnknown() {
+		state.ResourceClass = types.StringNull()
 	}
 
 	// Read the node from the API
@@ -786,21 +790,45 @@ func (r *nodeV1Resource) Update(
 	nameChanged := !plan.Name.Equal(state.Name) || !plan.Namespace.Equal(state.Namespace)
 	if nameChanged {
 		// Build the node name: combine namespace and name if namespace is provided
-		nodeName := plan.Name.ValueString()
+		fullName := plan.Name.ValueString()
 		if !plan.Namespace.IsNull() &&
 			!plan.Namespace.IsUnknown() &&
 			plan.Namespace.ValueString() != "" {
-			nodeName = plan.Namespace.ValueString() + "~" + plan.Name.ValueString()
+			fullName = plan.Namespace.ValueString() + "~" + plan.Name.ValueString()
 		}
 		updateOpts = append(updateOpts, nodes.UpdateOperation{
 			Op:    nodes.ReplaceOp,
 			Path:  "/name",
-			Value: nodeName,
+			Value: fullName,
+		})
+		state.FullName = types.StringValue(fullName)
+		state.Name = plan.Name
+		state.Namespace = plan.Namespace
+	}
+
+	// Handle driver changes
+	if !plan.Driver.Equal(state.Driver) {
+		updateOpts = append(updateOpts, nodes.UpdateOperation{
+			Op:    nodes.ReplaceOp,
+			Path:  "/driver",
+			Value: plan.Driver.ValueString(),
 		})
 	}
 
-	// Add other update operations as needed...
-	// This is a simplified version - you would need to handle all updatable fields
+	// Handle interface changes
+	r.addInterfaceUpdateOps(&updateOpts, &plan, &state)
+
+	// Handle dynamic type changes
+	r.addDynamicUpdateOps(ctx, &updateOpts, &plan, &state, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Handle string field changes
+	r.addStringUpdateOps(&updateOpts, &plan, &state)
+
+	// Handle boolean field changes
+	r.addBooleanUpdateOps(&updateOpts, &plan, &state)
 
 	if len(updateOpts) > 0 {
 		// Get the ironic client
@@ -983,6 +1011,20 @@ func (r *nodeV1Resource) readNodeData(
 		model.Properties = types.DynamicNull()
 	}
 
+	if node.DeployStep != nil {
+		if deployStep, err := util.MapToDynamic(ctx, node.DeployStep); err != nil {
+			diagnostics.AddAttributeError(
+				path.Root("deployStep"),
+				"Error Converting DeployStep",
+				fmt.Sprintf("Could not convert deployStep to dynamic: %s", err),
+			)
+		} else {
+			model.DeployStep = deployStep
+		}
+	} else {
+		model.DeployStep = types.DynamicNull()
+	}
+
 	if node.DriverInfo != nil {
 		if driverInfo, err := util.MapToDynamic(ctx, node.DriverInfo); err != nil {
 			diagnostics.AddAttributeError(
@@ -1051,6 +1093,164 @@ func timeTypeOrNull(v time.Time) timetypes.RFC3339 {
 	}
 }
 
+// addDynamicUpdateOps handles changes for dynamic attributes.
+func (r *nodeV1Resource) addDynamicUpdateOps(
+	ctx context.Context,
+	updateOpts *nodes.UpdateOpts,
+	plan *nodeV1ResourceModel,
+	state *nodeV1ResourceModel,
+	diagnostics *diag.Diagnostics,
+) {
+	r.addDynamicUpdateOpsForField(
+		ctx,
+		updateOpts,
+		diagnostics,
+		plan.Properties,
+		state.Properties,
+		"properties",
+	)
+	r.addDynamicUpdateOpsForField(
+		ctx,
+		updateOpts,
+		diagnostics,
+		plan.DriverInfo,
+		state.DriverInfo,
+		"driver_info",
+	)
+	r.addDynamicUpdateOpsForField(
+		ctx,
+		updateOpts,
+		diagnostics,
+		plan.ExtraData,
+		state.ExtraData,
+		"extra",
+	)
+	r.addDynamicUpdateOpsForField(
+		ctx,
+		updateOpts,
+		diagnostics,
+		plan.InstanceInfo,
+		state.InstanceInfo,
+		"instance_info",
+	)
+}
+
+// addDynamicUpdateOpsForField handles changes for a single dynamic attribute.
+func (r *nodeV1Resource) addDynamicUpdateOpsForField(
+	ctx context.Context,
+	updateOpts *nodes.UpdateOpts,
+	diagnostics *diag.Diagnostics,
+	planValue, stateValue types.Dynamic,
+	fieldName string,
+) {
+	if planValue.Equal(stateValue) {
+		return
+	}
+
+	basePath := "/" + fieldName
+
+	planMap, err := util.DynamicToMap(ctx, planValue)
+	if err != nil {
+		diagnostics.AddAttributeError(
+			path.Root(fieldName),
+			"Error Converting Plan Value",
+			fmt.Sprintf("Could not convert %s to map: %s", fieldName, err),
+		)
+		return
+	}
+
+	stateMap, err := util.DynamicToMap(ctx, stateValue)
+	if err != nil {
+		diagnostics.AddAttributeError(
+			path.Root(fieldName),
+			"Error Converting State Value",
+			fmt.Sprintf("Could not convert %s to map: %s", fieldName, err),
+		)
+		return
+	}
+
+	// If one of the maps is nil (e.g. attribute is null or empty),
+	// we replace the whole object.
+	if planMap == nil || stateMap == nil {
+		*updateOpts = append(*updateOpts, nodes.UpdateOperation{
+			Op:    nodes.ReplaceOp,
+			Path:  basePath,
+			Value: planMap, // if planMap is nil, this will set the field to null.
+		})
+		return
+	}
+
+	// Compare maps and generate update operations
+	for key, planVal := range planMap {
+		stateVal, ok := stateMap[key]
+		if !ok {
+			// Add operation
+			*updateOpts = append(*updateOpts, nodes.UpdateOperation{
+				Op:    nodes.AddOp,
+				Path:  fmt.Sprintf("%s/%s", basePath, key),
+				Value: planVal,
+			})
+		} else if !reflect.DeepEqual(planVal, stateVal) {
+			// Replace operation
+			*updateOpts = append(*updateOpts, nodes.UpdateOperation{
+				Op:    nodes.ReplaceOp,
+				Path:  fmt.Sprintf("%s/%s", basePath, key),
+				Value: planVal,
+			})
+		}
+	}
+
+	for key := range stateMap {
+		if _, ok := planMap[key]; !ok {
+			// Remove operation
+			*updateOpts = append(*updateOpts, nodes.UpdateOperation{
+				Op:   nodes.RemoveOp,
+				Path: fmt.Sprintf("%s/%s", basePath, key),
+			})
+		}
+	}
+}
+
+// addInterfaceUpdateOps handles changes for interface attributes.
+func (r *nodeV1Resource) addInterfaceUpdateOps(
+	updateOpts *nodes.UpdateOpts,
+	plan *nodeV1ResourceModel,
+	state *nodeV1ResourceModel,
+) {
+	// TODO: Implement interface update logic
+}
+
+// addStringUpdateOps handles changes for string attributes.
+func (r *nodeV1Resource) addStringUpdateOps(
+	updateOpts *nodes.UpdateOpts,
+	plan *nodeV1ResourceModel,
+	state *nodeV1ResourceModel,
+) {
+	if !plan.BIOSInterface.Equal(state.BIOSInterface) {
+		*updateOpts = append(*updateOpts, nodes.UpdateOperation{
+			Op:    nodes.ReplaceOp,
+			Path:  "/bios_interface",
+			Value: plan.BIOSInterface.ValueString(),
+		})
+	}
+	if !plan.ResourceClass.Equal(state.ResourceClass) {
+		*updateOpts = append(*updateOpts, nodes.UpdateOperation{
+			Op:    nodes.ReplaceOp,
+			Path:  "/resource_class",
+			Value: plan.ResourceClass.ValueString(),
+		})
+	}
+}
+
+// addBooleanUpdateOps handles changes for boolean attributes.
+func (r *nodeV1Resource) addBooleanUpdateOps(
+	updateOpts *nodes.UpdateOpts,
+	plan *nodeV1ResourceModel,
+	state *nodeV1ResourceModel,
+) {
+	// TODO: Implement boolean update logic
+}
+
 // handleActionAttributes handles the action attributes (clean, inspect, available, manage).
 // These attributes trigger state changes but are not persisted in the API.
 func (r *nodeV1Resource) handleActionAttributes(
@@ -1066,6 +1266,15 @@ func (r *nodeV1Resource) handleActionAttributes(
 		diagnostics.AddError(
 			"Error getting Ironic client",
 			fmt.Sprintf("Could not get Ironic client: %s", err),
+		)
+		return
+	}
+
+	nodeInfo, err := nodes.Get(ctx, client, nodeUUID).Extract()
+	if err != nil {
+		diagnostics.AddError(
+			"Error getting node information",
+			fmt.Sprintf("Could not get node %s: %s", nodeUUID, err),
 		)
 		return
 	}
@@ -1094,24 +1303,29 @@ func (r *nodeV1Resource) handleActionAttributes(
 
 	// Handle inspect action
 	if !model.Inspect.IsNull() && model.Inspect.ValueBool() {
-		err := ChangeProvisionStateToTarget(
-			ctx,
-			client,
-			nodeUUID,
-			nodes.TargetInspect,
-			nil,
-			nil,
-			nil,
-		)
-		if err != nil {
-			diagnostics.AddError(
-				"Error inspecting node",
-				fmt.Sprintf("Could not inspect node %s: %s", nodeUUID, err),
-			)
-			return
+		if model.InspectionFinished.IsNull() || model.InspectionFinished.IsUnknown() {
+			if nodeInfo.ProvisionState == string(nodes.Manageable) {
+				err := ChangeProvisionStateToTarget(
+					ctx,
+					client,
+					nodeUUID,
+					nodes.TargetInspect,
+					nil,
+					nil,
+					nil,
+				)
+				if err != nil {
+					diagnostics.AddError(
+						"Error inspecting node",
+						fmt.Sprintf("Could not inspect node %s: %s", nodeUUID, err),
+					)
+					return
+				}
+
+				// Reset the action attribute to null after triggering
+				model.Inspect = types.BoolNull()
+			}
 		}
-		// Reset the action attribute to null after triggering
-		model.Inspect = types.BoolNull()
 	}
 
 	// Handle available action

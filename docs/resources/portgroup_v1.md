@@ -26,7 +26,7 @@ terraform {
 
 provider "ironic" {
   url           = "http://localhost:6385/v1"
-  microversion  = "1.52"
+  microversion  = "1.99"
   auth_strategy = "noauth"
 }
 

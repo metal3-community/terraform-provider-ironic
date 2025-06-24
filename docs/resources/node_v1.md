@@ -70,8 +70,6 @@ resource "ironic_node_v1" "openshift-master-0" {
 - `instance_info` (Dynamic, Sensitive) The instance info of the node.
 - `instance_uuid` (String) The UUID of the instance associated with the node.
 - `lessee` (String) The lessee of the node.
-- `maintenance` (Boolean) Indicates whether the node is in maintenance mode.
-- `maintenance_reason` (String) The reason for putting the node in maintenance mode.
 - `manage` (Boolean) Manage node. When set to true, the node will be moved to the manageable state.
 - `management_interface` (String) The management interface for the node.
 - `name` (String) The name of the node.
@@ -101,6 +99,8 @@ resource "ironic_node_v1" "openshift-master-0" {
 - `inspection_finished_at` (String) The timestamp when the node inspection finished.
 - `inspection_started_at` (String) The timestamp when the node inspection started.
 - `last_error` (String) The last error message for the node.
+- `maintenance` (Boolean) Indicates whether the node is in maintenance mode.
+- `maintenance_reason` (String) The reason for putting the node in maintenance mode.
 - `power_state` (String) The current power state of the node.
 - `provision_state` (String) The current provision state of the node.
 - `provision_updated_at` (String) The timestamp when the node provision was last updated.

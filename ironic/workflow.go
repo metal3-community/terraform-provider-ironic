@@ -253,8 +253,8 @@ type provisionWorkflow struct {
 // execute runs the provision workflow.
 func (w *provisionWorkflow) execute() error {
 	const (
-		maxAttempts  = 10
-		pollInterval = 10 * time.Second
+		maxAttempts  = 1000
+		pollInterval = 15 * time.Second
 		maxTimeout   = 30 * time.Minute
 	)
 
@@ -410,6 +410,9 @@ func (w *provisionWorkflow) determineNextTarget(currentState ProvisionState) Pro
 		}
 		if currentState == StateManageable {
 			return TargetInspect
+		}
+		if currentState == StateAvailable {
+			return TargetManage
 		}
 
 	case TargetClean:

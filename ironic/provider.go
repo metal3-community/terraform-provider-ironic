@@ -3,7 +3,6 @@ package ironic
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 
 	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/httpbasic"
@@ -156,7 +155,7 @@ func (p *ironicProvider) Configure(
 		)
 		return
 	}
-	log.Printf("[DEBUG] Ironic endpoint is %s", url)
+	tflog.Debug(ctx, "Setting up ironic endpoint", map[string]any{"url": url})
 
 	// Get microversion with environment variable fallback and default
 	microversion := data.Microversion.ValueString()
@@ -164,7 +163,7 @@ func (p *ironicProvider) Configure(
 		if v := os.Getenv("IRONIC_MICROVERSION"); v != "" {
 			microversion = v
 		} else {
-			microversion = "1.52"
+			microversion = "1.99"
 		}
 	}
 
@@ -179,7 +178,7 @@ func (p *ironicProvider) Configure(
 	}
 
 	if authStrategy == "http_basic" {
-		log.Printf("[DEBUG] Using http_basic auth_strategy")
+		tflog.Debug(ctx, "Using http_basic auth_strategy")
 
 		// Get Ironic credentials with environment variable fallback
 		ironicUser := data.IronicUsername.ValueString()
@@ -212,52 +211,8 @@ func (p *ironicProvider) Configure(
 		ironic.Microversion = microversion
 		clients.ironic = ironic
 
-		// Inspector setup commented out - migrated to Ironic nodes API
-		// // Handle inspector endpoint if provided
-		// inspectorURL := data.Inspector.ValueString()
-		// if inspectorURL == "" {
-		// 	if v := os.Getenv("IRONIC_INSPECTOR_ENDPOINT"); v != "" {
-		// 		inspectorURL = v
-		// 	}
-		// }
-		//
-		// if inspectorURL != "" {
-		// 	inspectorUser := data.InspectorUsername.ValueString()
-		// 	if inspectorUser == "" {
-		// 		if v := os.Getenv("INSPECTOR_HTTP_BASIC_USERNAME"); v != "" {
-		// 			inspectorUser = v
-		// 		}
-		// 	}
-		//
-		// 	inspectorPassword := data.InspectorPassword.ValueString()
-		// 	if inspectorPassword == "" {
-		// 		if v := os.Getenv("INSPECTOR_HTTP_BASIC_PASSWORD"); v != "" {
-		// 			inspectorPassword = v
-		// 		}
-		// 	}
-		//
-		// 	log.Printf("[DEBUG] Inspector endpoint is %s", inspectorURL)
-
-		// Inspector client setup commented out - migrated to Ironic nodes API
-		// inspector, err := httpbasicintrospection.NewBareMetalIntrospectionHTTPBasic(
-		// 	httpbasicintrospection.EndpointOpts{
-		// 		IronicInspectorEndpoint:     inspectorURL,
-		// 		IronicInspectorUser:         inspectorUser,
-		// 		IronicInspectorUserPassword: inspectorPassword,
-		// 	},
-		// )
-		// if err != nil {
-		// 	res.Diagnostics.AddError(
-		// 		"Could not configure inspector endpoint",
-		// 		fmt.Sprintf("Error: %s", err.Error()),
-		// 	)
-		// 	return
-		// }
-		// clients.inspector = inspector
-		// }
-
 	} else {
-		log.Printf("[DEBUG] Using noauth auth_strategy")
+		tflog.Debug(ctx, "Using noauth auth_strategy")
 		ironic, err := noauth.NewBareMetalNoAuth(noauth.EndpointOpts{
 			IronicEndpoint: url,
 		})
@@ -270,31 +225,6 @@ func (p *ironicProvider) Configure(
 		}
 		ironic.Microversion = microversion
 		clients.ironic = ironic
-
-		// Inspector setup commented out - migrated to Ironic nodes API
-		// // Handle inspector endpoint if provided
-		// inspectorURL := data.Inspector.ValueString()
-		// if inspectorURL == "" {
-		// 	if v := os.Getenv("IRONIC_INSPECTOR_ENDPOINT"); v != "" {
-		// 		inspectorURL = v
-		// 	}
-		// }
-		//
-		// if inspectorURL != "" {
-		// 	// Inspector client setup commented out - migrated to Ironic nodes API
-		// 	// log.Printf("[DEBUG] Inspector endpoint is %s", inspectorURL)
-		// 	// inspector, err := noauthintrospection.NewBareMetalIntrospectionNoAuth(noauthintrospection.EndpointOpts{
-		// 	// 	IronicInspectorEndpoint: inspectorURL,
-		// 	// })
-		// 	// if err != nil {
-		// 	// 	res.Diagnostics.AddError(
-		// 	// 		"Could not configure inspector endpoint",
-		// 	// 		fmt.Sprintf("Error: %s", err.Error()),
-		// 	// 	)
-		// 	// 	return
-		// 	// }
-		// 	// clients.inspector = inspector
-		// }
 	}
 
 	// Set timeout with default value of 0

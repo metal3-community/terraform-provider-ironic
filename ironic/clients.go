@@ -94,14 +94,6 @@ func GetIronicClient(ctx context.Context, meta any) (*gophercloud.ServiceClient,
 		return nil, fmt.Errorf("could not get Ironic client: %w", err)
 	}
 
-	// Ensure the API is available before returning the client.
-	if err := healthCheck(ctx, ironicClient); err != nil {
-		tflog.Error(ctx, "ironic API health check failed", map[string]any{
-			"error": err.Error(),
-		})
-		return nil, fmt.Errorf("ironic API health check failed: %w", err)
-	}
-
 	return ironicClient, nil
 }
 

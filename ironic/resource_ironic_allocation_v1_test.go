@@ -109,16 +109,34 @@ func TestAccIronicAllocationV1_migration(t *testing.T) {
 				},
 				Config: testAccAllocationResourceSDK(nodeName, resourceClass, allocationName),
 				Check: resource.ComposeTestCheckFunc(
-					testAccCheckAllocationExistsSDK("ironic_allocation_v1."+allocationName, &allocation),
-					resource.TestCheckResourceAttr("ironic_allocation_v1."+allocationName, "state", "active"),
+					testAccCheckAllocationExistsSDK(
+						"ironic_allocation_v1."+allocationName,
+						&allocation,
+					),
+					resource.TestCheckResourceAttr(
+						"ironic_allocation_v1."+allocationName,
+						"state",
+						"active",
+					),
 				),
 			},
 			{
 				ProtoV5ProviderFactories: protoV5ProviderFactories(),
-				Config:                   testAccAllocationResource(nodeName, resourceClass, allocationName),
+				Config: testAccAllocationResource(
+					nodeName,
+					resourceClass,
+					allocationName,
+				),
 				Check: resource.ComposeTestCheckFunc(
-					testAccCheckAllocationExists("ironic_allocation_v1."+allocationName, &allocation),
-					resource.TestCheckResourceAttr("ironic_allocation_v1."+allocationName, "state", "active"),
+					testAccCheckAllocationExists(
+						"ironic_allocation_v1."+allocationName,
+						&allocation,
+					),
+					resource.TestCheckResourceAttr(
+						"ironic_allocation_v1."+allocationName,
+						"state",
+						"active",
+					),
 				),
 			},
 		},
@@ -215,7 +233,10 @@ func testAccAllocationResource(node, resourceClass, allocation string) string {
 		}`, node, node, resourceClass, allocation, allocation, resourceClass, node)
 }
 
-func testAccCheckAllocationExistsSDK(name string, allocation *allocations.Allocation) resource.TestCheckFunc {
+func testAccCheckAllocationExistsSDK(
+	name string,
+	allocation *allocations.Allocation,
+) resource.TestCheckFunc {
 	return func(state *terraform.State) error {
 		client, err := testAccProvider.Meta().(*Clients).GetIronicClient()
 		if err != nil {

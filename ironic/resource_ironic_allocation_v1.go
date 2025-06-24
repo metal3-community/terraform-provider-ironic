@@ -246,7 +246,7 @@ func (r *allocationV1Resource) Create(
 	plan.ID = types.StringValue(allocation.UUID)
 
 	// Wait for allocation to complete
-	if err := r.waitForAllocationComplete(ctx, client, allocation.UUID, &plan, &resp.Diagnostics); err != nil {
+	if err := r.waitForAllocationComplete(ctx, allocation.UUID, &plan, &resp.Diagnostics); err != nil {
 		resp.Diagnostics.AddError(
 			"Error waiting for allocation completion",
 			fmt.Sprintf("Could not wait for allocation to complete: %s", err),
@@ -372,7 +372,6 @@ func (r *allocationV1Resource) ImportState(
 // Helper function to wait for allocation completion.
 func (r *allocationV1Resource) waitForAllocationComplete(
 	ctx context.Context,
-	client *gophercloud.ServiceClient,
 	allocationID string,
 	model *allocationV1ResourceModel,
 	diagnostics *diag.Diagnostics,

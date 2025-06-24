@@ -76,6 +76,8 @@ resource "ironic_allocation_v1" "cluster_allocation" {
 - `candidate_nodes` (List of String) List of candidate node UUIDs for this allocation.
 - `extra` (Dynamic) Extra metadata for the allocation.
 - `name` (String) The name of the allocation.
+- `node` (String) Backfill this allocation from the provided node that has already been deployed. 
+				Bypasses the normal allocation process. Conflicts with "candidate_nodes".
 - `traits` (List of String) List of required traits for this allocation.
 
 ### Read-Only

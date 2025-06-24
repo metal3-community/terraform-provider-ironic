@@ -482,7 +482,20 @@ func (r *allocationV1Resource) readAllocationData(
 	model.ResourceClass = types.StringValue(allocation.ResourceClass)
 	model.NodeUUID = types.StringValue(allocation.NodeUUID)
 	model.State = types.StringValue(allocation.State)
-	model.LastError = types.StringValue(allocation.LastError)
+
+	// Handle last_error - set to null if empty string
+	if allocation.LastError == "" {
+		model.LastError = types.StringNull()
+	} else {
+		model.LastError = types.StringValue(allocation.LastError)
+	}
+
+	// Handle node field - set to the allocated node UUID if allocation is complete
+	if allocation.NodeUUID != "" {
+		model.Node = types.StringValue(allocation.NodeUUID)
+	} else {
+		model.Node = types.StringNull()
+	}
 
 	// Handle candidate nodes list
 	if len(allocation.CandidateNodes) > 0 {
@@ -517,7 +530,7 @@ func (r *allocationV1Resource) readAllocationData(
 	}
 
 	// Handle extra data
-	if allocation.Extra != nil {
+	if len(allocation.Extra) > 0 {
 		extra, err := util.StringMapToDynamic(ctx, allocation.Extra)
 		if err != nil {
 			diagnostics.AddError(

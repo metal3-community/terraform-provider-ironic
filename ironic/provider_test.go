@@ -11,6 +11,8 @@ import (
 
 	th "github.com/appkins-org/terraform-provider-ironic/testhelper"
 	gth "github.com/gophercloud/gophercloud/v2/testhelper"
+	"github.com/hashicorp/terraform-plugin-framework/providerserver"
+	"github.com/hashicorp/terraform-plugin-go/tfprotov5"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 )
@@ -25,6 +27,16 @@ func init() {
 
 	testAccProviders = map[string]*schema.Provider{
 		"ironic": testAccProvider,
+	}
+}
+
+// protoV5ProviderFactories are used to instantiate a provider during
+// acceptance testing. The factory function will be invoked for every Terraform
+// CLI command executed to create a provider server to which the CLI can
+// reattach.
+func protoV5ProviderFactories() map[string]func() (tfprotov5.ProviderServer, error) {
+	return map[string]func() (tfprotov5.ProviderServer, error){
+		"ironic": providerserver.NewProtocol5WithError(NewFrameworkProvider()),
 	}
 }
 

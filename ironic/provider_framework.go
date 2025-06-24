@@ -309,6 +309,7 @@ func (p *frameworkProvider) DataSources(ctx context.Context) []func() datasource
 func (p *frameworkProvider) Resources(ctx context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewNodeV1Resource,
+		NewPortgroupV1Resource,
 	}
 }
 

@@ -14,34 +14,34 @@ import (
 
 // Ensure the implementation satisfies the expected interfaces.
 var (
-	_ datasource.DataSource              = &introspectionDataSource{}
-	_ datasource.DataSourceWithConfigure = &introspectionDataSource{}
+	_ datasource.DataSource              = &NodeInventoryDataSource{}
+	_ datasource.DataSourceWithConfigure = &NodeInventoryDataSource{}
 )
 
-// introspectionDataSource defines the data source implementation.
-type introspectionDataSource struct {
+// NodeInventoryDataSource defines the data source implementation.
+type NodeInventoryDataSource struct {
 	clients *Clients
 }
 
-// introspectionDataSourceModel describes the data source data model.
-type introspectionDataSourceModel struct {
-	ID        types.String                 `tfsdk:"id"`
-	UUID      types.String                 `tfsdk:"uuid"`
-	Inventory *introspectionInventoryModel `tfsdk:"inventory"`
-	CPU       *introspectionCPUModel       `tfsdk:"cpu"`
-	Memory    *introspectionMemoryModel    `tfsdk:"memory"`
-	Disks     []introspectionDiskModel     `tfsdk:"disks"`
-	NICs      []introspectionNICModel      `tfsdk:"nics"`
-	System    *introspectionSystemModel    `tfsdk:"system"`
+// inventoryDataSourceModel describes the data source data model.
+type inventoryDataSourceModel struct {
+	ID        types.String             `tfsdk:"id"`
+	UUID      types.String             `tfsdk:"uuid"`
+	Inventory *inventoryInventoryModel `tfsdk:"inventory"`
+	CPU       *inventoryCPUModel       `tfsdk:"cpu"`
+	Memory    *inventoryMemoryModel    `tfsdk:"memory"`
+	Disks     []inventoryDiskModel     `tfsdk:"disks"`
+	NICs      []inventoryNICModel      `tfsdk:"nics"`
+	System    *inventorySystemModel    `tfsdk:"system"`
 }
 
-type introspectionInventoryModel struct {
+type inventoryInventoryModel struct {
 	BmcAddress    types.String `tfsdk:"bmc_address"`
 	BmcV6Address  types.String `tfsdk:"bmc_v6address"`
 	BootInterface types.String `tfsdk:"boot_interface"`
 }
 
-type introspectionCPUModel struct {
+type inventoryCPUModel struct {
 	Architecture types.String `tfsdk:"architecture"`
 	Count        types.Int64  `tfsdk:"count"`
 	Frequency    types.String `tfsdk:"frequency"`
@@ -49,12 +49,12 @@ type introspectionCPUModel struct {
 	ModelName    types.String `tfsdk:"model_name"`
 }
 
-type introspectionMemoryModel struct {
+type inventoryMemoryModel struct {
 	PhysicalMb types.Int64  `tfsdk:"physical_mb"`
 	Total      types.String `tfsdk:"total"`
 }
 
-type introspectionDiskModel struct {
+type inventoryDiskModel struct {
 	Name         types.String `tfsdk:"name"`
 	Model        types.String `tfsdk:"model"`
 	Size         types.Int64  `tfsdk:"size"`
@@ -65,7 +65,7 @@ type introspectionDiskModel struct {
 	Serial       types.String `tfsdk:"serial"`
 }
 
-type introspectionNICModel struct {
+type inventoryNICModel struct {
 	Name          types.String `tfsdk:"name"`
 	MAC           types.String `tfsdk:"mac"`
 	IPV4          types.String `tfsdk:"ipv4"`
@@ -77,7 +77,7 @@ type introspectionNICModel struct {
 	SpeedMbps     types.Int64  `tfsdk:"speed_mbps"`
 }
 
-type introspectionSystemModel struct {
+type inventorySystemModel struct {
 	Product      types.String `tfsdk:"product"`
 	Family       types.String `tfsdk:"family"`
 	Version      types.String `tfsdk:"version"`
@@ -87,32 +87,32 @@ type introspectionSystemModel struct {
 	Manufacturer types.String `tfsdk:"manufacturer"`
 }
 
-func NewIntrospectionDataSource() datasource.DataSource {
-	return &introspectionDataSource{}
+func NewNodeInventoryDataSource() datasource.DataSource {
+	return &NodeInventoryDataSource{}
 }
 
-func (d *introspectionDataSource) Metadata(
+func (d *NodeInventoryDataSource) Metadata(
 	ctx context.Context,
 	req datasource.MetadataRequest,
 	resp *datasource.MetadataResponse,
 ) {
-	resp.TypeName = req.ProviderTypeName + "_introspection"
+	resp.TypeName = req.ProviderTypeName + "_node_inventory"
 }
 
-func (d *introspectionDataSource) Schema(
+func (d *NodeInventoryDataSource) Schema(
 	ctx context.Context,
 	req datasource.SchemaRequest,
 	resp *datasource.SchemaResponse,
 ) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Retrieves introspection data for an Ironic node using the node's inventory data.",
+		MarkdownDescription: "Retrieves inventory data for an Ironic node using the node's inventory data.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				MarkdownDescription: "Data source identifier.",
 				Computed:            true,
 			},
 			"uuid": schema.StringAttribute{
-				MarkdownDescription: "UUID of the node to get introspection data for.",
+				MarkdownDescription: "UUID of the node to get inventory data for.",
 				Required:            true,
 			},
 		},
@@ -292,7 +292,7 @@ func (d *introspectionDataSource) Schema(
 	}
 }
 
-func (d *introspectionDataSource) Configure(
+func (d *NodeInventoryDataSource) Configure(
 	ctx context.Context,
 	req datasource.ConfigureRequest,
 	resp *datasource.ConfigureResponse,
@@ -316,12 +316,12 @@ func (d *introspectionDataSource) Configure(
 	d.clients = clients
 }
 
-func (d *introspectionDataSource) Read(
+func (d *NodeInventoryDataSource) Read(
 	ctx context.Context,
 	req datasource.ReadRequest,
 	resp *datasource.ReadResponse,
 ) {
-	var config introspectionDataSourceModel
+	var config inventoryDataSourceModel
 
 	// Read Terraform configuration data into the model
 	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
@@ -357,14 +357,14 @@ func (d *introspectionDataSource) Read(
 
 	// Basic inventory information
 	if inventoryData != nil {
-		config.Inventory = &introspectionInventoryModel{
+		config.Inventory = &inventoryInventoryModel{
 			BmcAddress:    types.StringValue(inventoryData.Inventory.BmcAddress),
 			BmcV6Address:  types.StringValue(""), // Not available in InventoryType
 			BootInterface: types.StringValue(inventoryData.Inventory.Boot.PXEInterface),
 		}
 
 		// CPU information
-		config.CPU = &introspectionCPUModel{
+		config.CPU = &inventoryCPUModel{
 			Architecture: types.StringValue(inventoryData.Inventory.CPU.Architecture),
 			Count:        types.Int64Value(int64(inventoryData.Inventory.CPU.Count)),
 			Frequency:    types.StringValue(inventoryData.Inventory.CPU.Frequency),
@@ -384,7 +384,7 @@ func (d *introspectionDataSource) Read(
 		config.CPU.Flags = cpuFlags
 
 		// Memory information
-		config.Memory = &introspectionMemoryModel{
+		config.Memory = &inventoryMemoryModel{
 			PhysicalMb: types.Int64Value(int64(inventoryData.Inventory.Memory.PhysicalMb)),
 			Total: types.StringValue(
 				fmt.Sprintf("%d", inventoryData.Inventory.Memory.Total),
@@ -393,9 +393,9 @@ func (d *introspectionDataSource) Read(
 
 		// Disk information
 		if len(inventoryData.Inventory.Disks) > 0 {
-			disks := make([]introspectionDiskModel, len(inventoryData.Inventory.Disks))
+			disks := make([]inventoryDiskModel, len(inventoryData.Inventory.Disks))
 			for i, disk := range inventoryData.Inventory.Disks {
-				disks[i] = introspectionDiskModel{
+				disks[i] = inventoryDiskModel{
 					Name:         types.StringValue(disk.Name),
 					Model:        types.StringValue(disk.Model),
 					Size:         types.Int64Value(disk.Size),
@@ -411,9 +411,9 @@ func (d *introspectionDataSource) Read(
 
 		// NIC information
 		if len(inventoryData.Inventory.Interfaces) > 0 {
-			nics := make([]introspectionNICModel, len(inventoryData.Inventory.Interfaces))
+			nics := make([]inventoryNICModel, len(inventoryData.Inventory.Interfaces))
 			for i, nic := range inventoryData.Inventory.Interfaces {
-				nics[i] = introspectionNICModel{
+				nics[i] = inventoryNICModel{
 					Name:          types.StringValue(nic.Name),
 					MAC:           types.StringValue(nic.MACAddress),
 					IPV4:          types.StringValue(nic.IPV4Address),
@@ -429,7 +429,7 @@ func (d *introspectionDataSource) Read(
 		}
 
 		// System information
-		config.System = &introspectionSystemModel{
+		config.System = &inventorySystemModel{
 			Product: types.StringValue(
 				inventoryData.Inventory.SystemVendor.ProductName,
 			),

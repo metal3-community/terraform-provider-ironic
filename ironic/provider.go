@@ -238,7 +238,7 @@ func (p *ironicProvider) Configure(
 
 func (p *ironicProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
-		NewIntrospectionDataSource,
+		NewNodeInventoryDataSource,
 	}
 }
 

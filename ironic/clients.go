@@ -65,7 +65,7 @@ func (c *Clients) GetIronicClient() (*gophercloud.ServiceClient, error) {
 	done := make(chan struct{})
 	go func() {
 		tflog.Info(ctx, "Waiting for Ironic API to become available")
-		healthCheck(ctx, c.ironic)
+		_ = healthCheck(ctx, c.ironic)
 		close(done)
 	}()
 
@@ -95,7 +95,12 @@ func GetIronicClient(ctx context.Context, meta any) (*gophercloud.ServiceClient,
 	}
 
 	// Ensure the API is available before returning the client.
-	healthCheck(ctx, ironicClient)
+	if err := healthCheck(ctx, ironicClient); err != nil {
+		tflog.Error(ctx, "ironic API health check failed", map[string]any{
+			"error": err.Error(),
+		})
+		return nil, fmt.Errorf("ironic API health check failed: %w", err)
+	}
 
 	return ironicClient, nil
 }
@@ -105,7 +110,7 @@ func healthCheck(ctx context.Context, client *gophercloud.ServiceClient) error {
 	// This is a placeholder for actual health check logic.
 	pages, err := conductors.List(client, conductors.ListOpts{}).AllPages(ctx)
 	if err != nil {
-		return fmt.Errorf("Ironic API health check failed: %w", err)
+		return fmt.Errorf("ironic API health check failed: %w", err)
 	}
 
 	conductorsList, err := conductors.ExtractConductors(pages)
@@ -120,10 +125,8 @@ func healthCheck(ctx context.Context, client *gophercloud.ServiceClient) error {
 				"alive":    conductor.Alive,
 				"drivers":  conductor.Drivers,
 			})
-			return fmt.Errorf(
-				"Ironic API health check failed: conductor %s is not alive",
-				conductor.Hostname,
-			)
+			return fmt.Errorf("ironic API health check failed: conductor %s is not alive",
+				conductor.Hostname)
 		}
 		if len(conductor.Drivers) == 0 {
 			tflog.Error(ctx, "Conductor has no drivers", map[string]any{
@@ -131,7 +134,7 @@ func healthCheck(ctx context.Context, client *gophercloud.ServiceClient) error {
 				"drivers":  conductor.Drivers,
 			})
 			return fmt.Errorf(
-				"Ironic API health check failed: conductor %s has no drivers",
+				"ironic API health check failed: conductor %s has no drivers",
 				conductor.Hostname,
 			)
 		}

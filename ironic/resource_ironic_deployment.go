@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -50,7 +49,7 @@ type deploymentResourceModel struct {
 	NodeUUID           types.String  `tfsdk:"node_uuid"`
 	InstanceInfo       types.Dynamic `tfsdk:"instance_info"`
 	DeploySteps        types.String  `tfsdk:"deploy_steps"`
-	UserData           types.String  `tfsdk:"user_data"`
+	UserData           types.Dynamic `tfsdk:"user_data"`
 	UserDataURL        types.String  `tfsdk:"user_data_url"`
 	UserDataURLCaCert  types.String  `tfsdk:"user_data_url_ca_cert"`
 	UserDataURLHeaders types.Dynamic `tfsdk:"user_data_url_headers"`
@@ -116,11 +115,11 @@ func (r *deploymentResource) Schema(
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
-			"user_data": schema.StringAttribute{
+			"user_data": schema.DynamicAttribute{
 				MarkdownDescription: "User data for the deployment.",
 				Optional:            true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
+				PlanModifiers: []planmodifier.Dynamic{
+					dynamicplanmodifier.RequiresReplace(),
 				},
 			},
 			"user_data_url": schema.StringAttribute{
@@ -362,9 +361,23 @@ func (r *deploymentResource) Create(
 	}
 
 	// Handle user data
-	userData := model.UserData.ValueString()
 	userDataURL := model.UserDataURL.ValueString()
 	userDataCaCert := model.UserDataURLCaCert.ValueString()
+
+	// Build config drive
+	var userDataMap map[string]any
+	if !model.UserData.IsNull() && !model.UserData.IsUnknown() {
+		var err error
+		userDataMap, err = util.DynamicToMap(ctx, model.UserData)
+		if err != nil {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("user_data"),
+				"Error Converting Network Data",
+				fmt.Sprintf("Could not convert user_data to map: %s", err),
+			)
+			return
+		}
+	}
 
 	var userDataHeaders map[string]any
 	if !model.UserDataURLHeaders.IsNull() && !model.UserDataURLHeaders.IsUnknown() {
@@ -391,8 +404,8 @@ func (r *deploymentResource) Create(
 		)
 		return
 	}
-	if ignitionData != "" {
-		userData = ignitionData
+	if ignitionData != nil {
+		userDataMap = ignitionData
 	}
 
 	// Build config drive
@@ -424,7 +437,12 @@ func (r *deploymentResource) Create(
 		}
 	}
 
-	configDrive, err := buildConfigDrive(client.Microversion, userData, networkDataMap, metaDataMap)
+	configDrive, err := buildConfigDrive(
+		client.Microversion,
+		userDataMap,
+		networkDataMap,
+		metaDataMap,
+	)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error building config drive",
@@ -603,7 +621,7 @@ func fetchFullIgnition(
 	userDataURL string,
 	userDataCaCert string,
 	userDataHeaders map[string]any,
-) (string, error) {
+) (map[string]any, error) {
 	// Send full ignition, if the URL is specified
 	if userDataURL != "" {
 		caCertPool := x509.NewCertPool()
@@ -619,7 +637,7 @@ func fetchFullIgnition(
 						"error": err.Error(),
 					},
 				)
-				return "", err
+				return nil, err
 			}
 			caCertPool.AppendCertsFromPEM(caCert)
 			// disable "G402 (CWE-295): TLS MinVersion too low. (Confidence: HIGH, Severity: HIGH)"
@@ -646,7 +664,7 @@ func fetchFullIgnition(
 					"error": err.Error(),
 				},
 			)
-			return "", err
+			return nil, err
 		}
 		for k, v := range userDataHeaders {
 			if strVal, ok := v.(string); ok {
@@ -659,7 +677,7 @@ func fetchFullIgnition(
 				"url":   userDataURL,
 				"error": err.Error(),
 			})
-			return "", err
+			return nil, err
 		}
 		defer func() {
 			if err := resp.Body.Close(); err != nil {
@@ -672,8 +690,8 @@ func fetchFullIgnition(
 				)
 			}
 		}()
-		var userData []byte
-		userData, err = io.ReadAll(resp.Body)
+		var userData map[string]any
+		err = json.NewDecoder(resp.Body).Decode(&userData)
 		if err != nil {
 			tflog.Error(
 				context.Background(),
@@ -682,11 +700,11 @@ func fetchFullIgnition(
 					"error": err.Error(),
 				},
 			)
-			return "", err
+			return nil, err
 		}
-		return string(userData), nil
+		return userData, nil
 	}
-	return "", nil
+	return nil, nil
 }
 
 // buildDeploySteps handles customized deploy steps.

@@ -34,29 +34,23 @@ resource "ironic_deployment" "masters" {
 
 ### Required
 
+- `instance_info` (Dynamic) Instance information for the deployment.
 - `node_uuid` (String) The UUID of the node to deploy.
 
 ### Optional
 
-- `deploy_steps` (String) Custom deploy steps to run during deployment.
+- `deploy_steps` (String) JSON string of deploy steps for the deployment.
 - `fixed_ips` (List of Map of String) Fixed IP addresses for the deployment.
-- `instance_info` (Dynamic) Instance information for the deployment.
-- `metadata` (Dynamic) Metadata for the config drive.
+- `metadata` (Dynamic) Metadata for the deployment.
 - `name` (String) The name of the deployment.
-- `network_data` (Dynamic) Network data for the config drive.
-- `user_data` (String) User data for the config drive.
+- `network_data` (Dynamic) Network data for the deployment.
+- `user_data` (String) User data for the deployment.
 - `user_data_url` (String) URL to fetch user data from.
-- `user_data_url_ca_cert` (String) CA certificate for user data URL.
-- `user_data_url_headers` (Dynamic) Headers to send when fetching user data.
+- `user_data_url_ca_cert` (String) CA certificate for user data URL verification.
+- `user_data_url_headers` (Dynamic) Headers to send when fetching user data URL.
 
 ### Read-Only
 
 - `id` (String) The UUID of the deployment (same as node_uuid).
 - `last_error` (String) The last error message from the node.
 - `provision_state` (String) The current provision state of the node.
-
-### Read-Only
-
-- `id` (String) The ID of this resource.
-- `last_error` (String)
-- `provision_state` (String)

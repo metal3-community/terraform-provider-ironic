@@ -7,13 +7,14 @@ import (
 	"time"
 
 	"github.com/gophercloud/gophercloud/v2"
-	"github.com/hashicorp/terraform-plugin-log/tfsdklog"
+	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/v1/conductors"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
-// Clients stores the client connection information for Ironic and Inspector.
+// Clients stores the client connection information for Ironic.
 type Clients struct {
-	ironic    *gophercloud.ServiceClient
-	inspector *gophercloud.ServiceClient
+	ironic *gophercloud.ServiceClient
+	// inspector *gophercloud.ServiceClient // No longer used - migrated to Ironic nodes API
 
 	// Boolean that determines if Ironic API was previously determined to be available, we don't need to try every time.
 	ironicUp bool
@@ -26,14 +27,14 @@ type Clients struct {
 	ironicMux sync.Mutex
 
 	// Boolean that determines if Inspector API was previously determined to be available, we don't need to try every time.
-	inspectorUp bool
+	// inspectorUp bool // No longer used - migrated to Ironic nodes API
 
 	// Boolean that determines that we've already waited, and inspector API did not come up.
-	inspectorFailed bool
+	// inspectorFailed bool // No longer used - migrated to Ironic nodes API
 
 	// Mutex so that only one resource being created by terraform checks at a time. There's no reason to have multiple
 	// resources calling out to the API.
-	inspectorMux sync.Mutex
+	// inspectorMux sync.Mutex // No longer used - migrated to Ironic nodes API
 
 	timeout int
 }
@@ -63,10 +64,8 @@ func (c *Clients) GetIronicClient() (*gophercloud.ServiceClient, error) {
 
 	done := make(chan struct{})
 	go func() {
-		tfsdklog.Info(ctx, "Waiting for Ironic API to become available")
-		waitForAPI(ctx, c.ironic)
-		tfsdklog.Info(ctx, "Ironic API is up, waiting for conductor to be available")
-		waitForConductor(ctx, c.ironic)
+		tflog.Info(ctx, "Waiting for Ironic API to become available")
+		healthCheck(ctx, c.ironic)
 		close(done)
 	}()
 
@@ -84,53 +83,6 @@ func (c *Clients) GetIronicClient() (*gophercloud.ServiceClient, error) {
 	return c.ironic, ctx.Err()
 }
 
-// GetInspectorClient returns the API client for Ironic, optionally retrying to reach the API if timeout is set.
-func (c *Clients) GetInspectorClient() (*gophercloud.ServiceClient, error) {
-	// Terraform concurrently creates some resources which means multiple callers can request an Inspector client. We
-	// only need to check if the API is available once, so we use a mux to restrict one caller to polling the API.
-	// When the mux is released, the other callers will fall through to the check for inspectorUp.
-	c.inspectorMux.Lock()
-	defer c.inspectorMux.Unlock()
-
-	if c.inspector == nil {
-		return nil, fmt.Errorf("no inspector endpoint was specified")
-	} else if c.inspectorUp || c.timeout == 0 {
-		return c.inspector, nil
-	} else if c.inspectorFailed {
-		return nil, fmt.Errorf("could not contact Inspector API: timeout reached")
-	}
-
-	// Let's poll the API until it's up, or times out.
-	duration := time.Duration(c.timeout) * time.Second
-	ctx, cancel := context.WithTimeout(context.Background(), duration)
-	defer cancel()
-
-	done := make(chan struct{})
-	go func() {
-		tfsdklog.Info(ctx, "Waiting for Inspector API to become available")
-		waitForAPI(ctx, c.inspector)
-		close(done)
-	}()
-
-	// Wait for done or time out
-	select {
-	case <-ctx.Done():
-		if err := ctx.Err(); err != nil {
-			c.ironicFailed = true
-			return nil, err
-		}
-	case <-done:
-	}
-
-	if err := ctx.Err(); err != nil {
-		c.inspectorFailed = true
-		return nil, err
-	}
-
-	c.inspectorUp = true
-	return c.inspector, ctx.Err()
-}
-
 func GetIronicClient(ctx context.Context, meta any) (*gophercloud.ServiceClient, error) {
 	client, ok := meta.(*Clients)
 	if !ok {
@@ -143,7 +95,58 @@ func GetIronicClient(ctx context.Context, meta any) (*gophercloud.ServiceClient,
 	}
 
 	// Ensure the API is available before returning the client.
-	waitForAPI(ctx, ironicClient)
+	healthCheck(ctx, ironicClient)
 
 	return ironicClient, nil
+}
+
+func healthCheck(ctx context.Context, client *gophercloud.ServiceClient) error {
+	// Perform a simple health check by making a request to the API.
+	// This is a placeholder for actual health check logic.
+	pages, err := conductors.List(client, conductors.ListOpts{}).AllPages(ctx)
+	if err != nil {
+		return fmt.Errorf("Ironic API health check failed: %w", err)
+	}
+
+	conductorsList, err := conductors.ExtractConductors(pages)
+	if err != nil {
+		return fmt.Errorf("failed to extract conductors from Ironic API response: %w",
+			err)
+	}
+	for _, conductor := range conductorsList {
+		if !conductor.Alive {
+			tflog.Error(ctx, "Conductor is not alive", map[string]any{
+				"hostname": conductor.Hostname,
+				"alive":    conductor.Alive,
+				"drivers":  conductor.Drivers,
+			})
+			return fmt.Errorf(
+				"Ironic API health check failed: conductor %s is not alive",
+				conductor.Hostname,
+			)
+		}
+		if len(conductor.Drivers) == 0 {
+			tflog.Error(ctx, "Conductor has no drivers", map[string]any{
+				"hostname": conductor.Hostname,
+				"drivers":  conductor.Drivers,
+			})
+			return fmt.Errorf(
+				"Ironic API health check failed: conductor %s has no drivers",
+				conductor.Hostname,
+			)
+		}
+		tflog.Info(ctx, "Conductor is alive", map[string]any{
+			"hostname":   conductor.Hostname,
+			"drivers":    conductor.Drivers,
+			"alive":      conductor.Alive,
+			"group":      conductor.ConductorGroup,
+			"created_at": conductor.CreatedAt,
+			"updated_at": conductor.UpdatedAt,
+		})
+	}
+	// If we reach here, the API is considered healthy.
+	tflog.Info(ctx, "Ironic API is healthy", map[string]any{
+		"client": client.Endpoint,
+	})
+	return nil
 }

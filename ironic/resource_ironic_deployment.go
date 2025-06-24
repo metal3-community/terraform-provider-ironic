@@ -33,8 +33,9 @@ import (
 
 // Ensure the implementation satisfies the expected interfaces.
 var (
-	_ resource.Resource              = &deploymentResource{}
-	_ resource.ResourceWithConfigure = &deploymentResource{}
+	_ resource.Resource                = &deploymentResource{}
+	_ resource.ResourceWithConfigure   = &deploymentResource{}
+	_ resource.ResourceWithImportState = &deploymentResource{}
 )
 
 // deploymentResource defines the resource implementation.
@@ -481,6 +482,14 @@ func (r *deploymentResource) Read(
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
+}
+
+func (r *deploymentResource) ImportState(
+	ctx context.Context,
+	req resource.ImportStateRequest,
+	resp *resource.ImportStateResponse,
+) {
+	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }
 
 func (r *deploymentResource) read(

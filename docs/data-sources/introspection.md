@@ -3,18 +3,52 @@
 page_title: "ironic_introspection Data Source - ironic"
 subcategory: ""
 description: |-
-  
+  Retrieves introspection data for an Ironic node using the node's inventory data.
 ---
 
 # ironic_introspection (Data Source)
 
-
+Retrieves introspection data for an Ironic node using the node's inventory data.
 
 ## Example Usage
 
 ```terraform
 data "ironic_introspection" "openshift-master-0" {
   uuid = ironic_node_v1.openshift-master-0.id
+}
+
+# Example output usage
+output "cpu_info" {
+  value = {
+    architecture = data.ironic_introspection.openshift-master-0.cpu.architecture
+    count        = data.ironic_introspection.openshift-master-0.cpu.count
+    model_name   = data.ironic_introspection.openshift-master-0.cpu.model_name
+  }
+}
+
+output "memory_mb" {
+  value = data.ironic_introspection.openshift-master-0.memory.physical_mb
+}
+
+output "disk_devices" {
+  value = [
+    for disk in data.ironic_introspection.openshift-master-0.disks : {
+      name   = disk.name
+      size   = disk.size
+      model  = disk.model
+      serial = disk.serial
+    }
+  ]
+}
+
+output "network_interfaces" {
+  value = [
+    for nic in data.ironic_introspection.openshift-master-0.nics : {
+      name = nic.name
+      mac  = nic.mac
+      ipv4 = nic.ipv4
+    }
+  ]
 }
 ```
 
@@ -23,17 +57,89 @@ data "ironic_introspection" "openshift-master-0" {
 
 ### Required
 
-- `uuid` (String)
+- `uuid` (String) UUID of the node to get introspection data for.
 
 ### Read-Only
 
-- `cpu_arch` (String) CPU architecture (e.g., x86_64)
-- `cpu_count` (Number) The number of CPU's
-- `error` (String)
-- `finished` (Boolean)
-- `finished_at` (String)
-- `id` (String) The ID of this resource.
-- `interfaces` (List of Map of String) A list of interfaces that were discovered
-- `memory_mb` (Number) Memory in megabytes
-- `started_at` (String)
-- `state` (String)
+- `cpu` (Block, Read-only) CPU information. (see [below for nested schema](#nestedblock--cpu))
+- `disks` (Block List) List of discovered disks. (see [below for nested schema](#nestedblock--disks))
+- `id` (String) Data source identifier.
+- `inventory` (Block, Read-only) Basic inventory information. (see [below for nested schema](#nestedblock--inventory))
+- `memory` (Block, Read-only) Memory information. (see [below for nested schema](#nestedblock--memory))
+- `nics` (Block List) List of discovered network interfaces. (see [below for nested schema](#nestedblock--nics))
+- `system` (Block, Read-only) System information. (see [below for nested schema](#nestedblock--system))
+
+<a id="nestedblock--cpu"></a>
+### Nested Schema for `cpu`
+
+Read-Only:
+
+- `architecture` (String) CPU architecture (e.g., x86_64).
+- `count` (Number) Number of CPU cores.
+- `flags` (List of String) List of CPU flags.
+- `frequency` (String) CPU frequency.
+- `model_name` (String) CPU model name.
+
+
+<a id="nestedblock--disks"></a>
+### Nested Schema for `disks`
+
+Read-Only:
+
+- `model` (String) Disk model.
+- `name` (String) Disk device name.
+- `rotational` (Boolean) Whether the disk is rotational (HDD) or not (SSD).
+- `serial` (String) Disk serial number.
+- `size` (Number) Disk size in bytes.
+- `wwn` (String) World Wide Name of the disk.
+- `wwn_vendor_extension` (String) WWN vendor extension.
+- `wwn_with_extension` (String) WWN with extension.
+
+
+<a id="nestedblock--inventory"></a>
+### Nested Schema for `inventory`
+
+Read-Only:
+
+- `bmc_address` (String) BMC IP address.
+- `bmc_v6address` (String) BMC IPv6 address.
+- `boot_interface` (String) Boot interface name.
+
+
+<a id="nestedblock--memory"></a>
+### Nested Schema for `memory`
+
+Read-Only:
+
+- `physical_mb` (Number) Physical memory in MB.
+- `total` (String) Total memory as string.
+
+
+<a id="nestedblock--nics"></a>
+### Nested Schema for `nics`
+
+Read-Only:
+
+- `has_carrier` (Boolean) Whether the interface has carrier signal.
+- `ipv4` (String) IPv4 address.
+- `ipv6` (String) IPv6 address.
+- `lldp_processed` (Boolean) Whether LLDP data was processed for this interface.
+- `mac` (String) MAC address.
+- `name` (String) Interface name.
+- `product` (String) Network interface product name.
+- `speed_mbps` (Number) Interface speed in Mbps.
+- `vendor` (String) Network interface vendor.
+
+
+<a id="nestedblock--system"></a>
+### Nested Schema for `system`
+
+Read-Only:
+
+- `family` (String) System family.
+- `manufacturer` (String) System manufacturer.
+- `product` (String) System product name.
+- `serial` (String) System serial number.
+- `sku` (String) System SKU.
+- `uuid` (String) System UUID.
+- `version` (String) System version.

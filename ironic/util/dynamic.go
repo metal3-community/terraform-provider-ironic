@@ -267,3 +267,61 @@ func convertSingleTerraformValueToGo(value attr.Value) (any, error) {
 		return fmt.Sprintf("%v", value), nil
 	}
 }
+
+// StringMapToDynamic converts a map[string]string to types.Dynamic.
+func StringMapToDynamic(ctx context.Context, input map[string]string) (types.Dynamic, error) {
+	if input == nil {
+		return types.DynamicNull(), nil
+	}
+
+	if len(input) == 0 {
+		// Empty map - create an empty object
+		objectType := types.ObjectType{
+			AttrTypes: map[string]attr.Type{},
+		}
+		objectValue := types.ObjectValueMust(objectType.AttrTypes, map[string]attr.Value{})
+		return types.DynamicValue(objectValue), nil
+	}
+
+	// Convert all values to string types
+	attrTypes := make(map[string]attr.Type)
+	attrValues := make(map[string]attr.Value)
+
+	for key, value := range input {
+		attrTypes[key] = types.StringType
+		attrValues[key] = types.StringValue(value)
+	}
+
+	objectValue, diags := types.ObjectValue(attrTypes, attrValues)
+	if diags.HasError() {
+		return types.DynamicNull(), fmt.Errorf("error creating object value: %v", diags)
+	}
+
+	return types.DynamicValue(objectValue), nil
+}
+
+// DynamicToStringMap converts a types.Dynamic to map[string]string.
+func DynamicToStringMap(ctx context.Context, dynamic types.Dynamic) (map[string]string, error) {
+	if dynamic.IsNull() || dynamic.IsUnknown() {
+		return nil, nil
+	}
+
+	// First convert to generic map
+	genericMap, err := DynamicToMap(ctx, dynamic)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert all values to strings
+	result := make(map[string]string)
+	for key, value := range genericMap {
+		switch v := value.(type) {
+		case string:
+			result[key] = v
+		default:
+			result[key] = fmt.Sprintf("%v", v)
+		}
+	}
+
+	return result, nil
+}

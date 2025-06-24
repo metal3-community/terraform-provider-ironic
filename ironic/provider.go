@@ -79,10 +79,9 @@ func Provider() *schema.Provider {
 		ResourcesMap: map[string]*schema.Resource{
 			// "ironic_node_v1":       resourceNodeV1(),
 			// "ironic_port_v1":       resourcePortV1(),
-			"ironic_port_v1": resourcePortV1(),
 			// "ironic_portgroup_v1":  resourcePortGroupV1(),
-			"ironic_allocation_v1": resourceAllocationV1(),
-			"ironic_deployment":    resourceDeployment(),
+			// "ironic_allocation_v1": resourceAllocationV1(),
+			"ironic_deployment": resourceDeployment(),
 		},
 		DataSourcesMap: map[string]*schema.Resource{
 			"ironic_introspection": dataSourceIronicIntrospection(),

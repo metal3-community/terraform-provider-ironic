@@ -19,18 +19,18 @@ import (
 
 // Ensure the implementation satisfies the expected interfaces.
 var (
-	_ resource.Resource                = &portgroupV1Resource{}
-	_ resource.ResourceWithConfigure   = &portgroupV1Resource{}
-	_ resource.ResourceWithImportState = &portgroupV1Resource{}
+	_ resource.Resource                = &portGroupV1Resource{}
+	_ resource.ResourceWithConfigure   = &portGroupV1Resource{}
+	_ resource.ResourceWithImportState = &portGroupV1Resource{}
 )
 
-// portgroupV1Resource defines the resource implementation.
-type portgroupV1Resource struct {
+// portGroupV1Resource defines the resource implementation.
+type portGroupV1Resource struct {
 	clients *Clients
 }
 
-// portgroupV1ResourceModel describes the resource data model.
-type portgroupV1ResourceModel struct {
+// portGroupV1ResourceModel describes the resource data model.
+type portGroupV1ResourceModel struct {
 	ID       types.String  `tfsdk:"id"`
 	UUID     types.String  `tfsdk:"uuid"`
 	NodeUUID types.String  `tfsdk:"node_uuid"`
@@ -40,11 +40,11 @@ type portgroupV1ResourceModel struct {
 	Extra    types.Dynamic `tfsdk:"extra"`
 }
 
-func NewPortgroupV1Resource() resource.Resource {
-	return &portgroupV1Resource{}
+func NewPortGroupV1Resource() resource.Resource {
+	return &portGroupV1Resource{}
 }
 
-func (r *portgroupV1Resource) Metadata(
+func (r *portGroupV1Resource) Metadata(
 	ctx context.Context,
 	req resource.MetadataRequest,
 	resp *resource.MetadataResponse,
@@ -52,7 +52,7 @@ func (r *portgroupV1Resource) Metadata(
 	resp.TypeName = req.ProviderTypeName + "_portgroup_v1"
 }
 
-func (r *portgroupV1Resource) Schema(
+func (r *portGroupV1Resource) Schema(
 	ctx context.Context,
 	req resource.SchemaRequest,
 	resp *resource.SchemaResponse,
@@ -125,7 +125,7 @@ func (r *portgroupV1Resource) Schema(
 	}
 }
 
-func (r *portgroupV1Resource) Configure(
+func (r *portGroupV1Resource) Configure(
 	ctx context.Context,
 	req resource.ConfigureRequest,
 	resp *resource.ConfigureResponse,
@@ -149,12 +149,12 @@ func (r *portgroupV1Resource) Configure(
 	r.clients = clients
 }
 
-func (r *portgroupV1Resource) Create(
+func (r *portGroupV1Resource) Create(
 	ctx context.Context,
 	req resource.CreateRequest,
 	resp *resource.CreateResponse,
 ) {
-	var plan portgroupV1ResourceModel
+	var plan portGroupV1ResourceModel
 
 	// Get the plan
 	diags := req.Plan.Get(ctx, &plan)
@@ -243,12 +243,12 @@ func (r *portgroupV1Resource) Create(
 	resp.Diagnostics.Append(diags...)
 }
 
-func (r *portgroupV1Resource) Read(
+func (r *portGroupV1Resource) Read(
 	ctx context.Context,
 	req resource.ReadRequest,
 	resp *resource.ReadResponse,
 ) {
-	var state portgroupV1ResourceModel
+	var state portGroupV1ResourceModel
 
 	// Get current state
 	diags := req.State.Get(ctx, &state)
@@ -268,7 +268,7 @@ func (r *portgroupV1Resource) Read(
 	resp.Diagnostics.Append(diags...)
 }
 
-func (r *portgroupV1Resource) Update(
+func (r *portGroupV1Resource) Update(
 	ctx context.Context,
 	req resource.UpdateRequest,
 	resp *resource.UpdateResponse,
@@ -281,12 +281,12 @@ func (r *portgroupV1Resource) Update(
 	)
 }
 
-func (r *portgroupV1Resource) Delete(
+func (r *portGroupV1Resource) Delete(
 	ctx context.Context,
 	req resource.DeleteRequest,
 	resp *resource.DeleteResponse,
 ) {
-	var state portgroupV1ResourceModel
+	var state portGroupV1ResourceModel
 
 	// Get current state
 	diags := req.State.Get(ctx, &state)
@@ -316,7 +316,7 @@ func (r *portgroupV1Resource) Delete(
 	}
 }
 
-func (r *portgroupV1Resource) ImportState(
+func (r *portGroupV1Resource) ImportState(
 	ctx context.Context,
 	req resource.ImportStateRequest,
 	resp *resource.ImportStateResponse,
@@ -325,7 +325,7 @@ func (r *portgroupV1Resource) ImportState(
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 
 	// Read the portgroup data
-	var state portgroupV1ResourceModel
+	var state portGroupV1ResourceModel
 	state.ID = types.StringValue(req.ID)
 
 	r.readPortgroupData(ctx, &state, &resp.Diagnostics)
@@ -339,9 +339,9 @@ func (r *portgroupV1Resource) ImportState(
 }
 
 // Helper function to read portgroup data from the API and populate the model.
-func (r *portgroupV1Resource) readPortgroupData(
+func (r *portGroupV1Resource) readPortgroupData(
 	ctx context.Context,
-	model *portgroupV1ResourceModel,
+	model *portGroupV1ResourceModel,
 	diagnostics *diag.Diagnostics,
 ) {
 	client, err := r.clients.GetIronicClient()

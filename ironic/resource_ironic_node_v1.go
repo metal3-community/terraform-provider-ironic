@@ -3,6 +3,7 @@ package ironic
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/appkins-org/terraform-provider-ironic/ironic/util"
@@ -42,6 +43,8 @@ type nodeV1Resource struct {
 type nodeV1ResourceModel struct {
 	ID                   types.String      `tfsdk:"id"`
 	Name                 types.String      `tfsdk:"name"`
+	Namespace            types.String      `tfsdk:"namespace"`
+	FullName             types.String      `tfsdk:"full_name"`
 	AllocationUUID       types.String      `tfsdk:"allocation_uuid"`
 	Automated            types.Bool        `tfsdk:"automated_clean"`
 	Available            types.Bool        `tfsdk:"available"`
@@ -129,6 +132,21 @@ func (r *nodeV1Resource) Schema(
 				MarkdownDescription: "The name of the node.",
 				Optional:            true,
 				Computed:            true,
+			},
+			"namespace": schema.StringAttribute{
+				MarkdownDescription: "The namespace of the node.",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"full_name": schema.StringAttribute{
+				MarkdownDescription: "The full name of the node, combining name and namespace.",
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"network_interface": schema.StringAttribute{
 				MarkdownDescription: "The network interface for the node.",
@@ -543,7 +561,13 @@ func (r *nodeV1Resource) Create(
 
 	// Set optional fields
 	if !plan.Name.IsNull() && !plan.Name.IsUnknown() {
-		createOpts.Name = plan.Name.ValueString()
+		// Build the node name: combine namespace and name if namespace is provided
+		nodeName := plan.Name.ValueString()
+		if !plan.Namespace.IsNull() && !plan.Namespace.IsUnknown() &&
+			plan.Namespace.ValueString() != "" {
+			nodeName = plan.Namespace.ValueString() + "~" + plan.Name.ValueString()
+		}
+		createOpts.Name = nodeName
 	}
 
 	if !plan.NetworkInterface.IsNull() && !plan.NetworkInterface.IsUnknown() {
@@ -758,11 +782,20 @@ func (r *nodeV1Resource) Update(
 	updateOpts := nodes.UpdateOpts{}
 
 	// Check for changes and build update operations
-	if !plan.Name.Equal(state.Name) {
+	// Handle name changes (including namespace changes)
+	nameChanged := !plan.Name.Equal(state.Name) || !plan.Namespace.Equal(state.Namespace)
+	if nameChanged {
+		// Build the node name: combine namespace and name if namespace is provided
+		nodeName := plan.Name.ValueString()
+		if !plan.Namespace.IsNull() &&
+			!plan.Namespace.IsUnknown() &&
+			plan.Namespace.ValueString() != "" {
+			nodeName = plan.Namespace.ValueString() + "~" + plan.Name.ValueString()
+		}
 		updateOpts = append(updateOpts, nodes.UpdateOperation{
 			Op:    nodes.ReplaceOp,
 			Path:  "/name",
-			Value: plan.Name.ValueString(),
+			Value: nodeName,
 		})
 	}
 
@@ -895,7 +928,26 @@ func (r *nodeV1Resource) readNodeData(
 	model.Maintenance = types.BoolValue(node.Maintenance)
 	model.MaintenanceReason = types.StringValue(node.MaintenanceReason)
 	model.ManagementInterface = types.StringValue(node.ManagementInterface)
-	model.Name = types.StringValue(node.Name)
+
+	// Handle name parsing for Metal3 namespace pattern
+	// Set full_name from API response
+	model.FullName = types.StringValue(node.Name)
+
+	// Parse namespace and name from full_name if it contains the ~ delimiter
+	if strings.Contains(node.Name, "~") {
+		parts := strings.SplitN(node.Name, "~", 2)
+		if len(parts) == 2 {
+			model.Namespace = types.StringValue(parts[0])
+			model.Name = types.StringValue(parts[1])
+			// Don't overwrite the user-configured name, keep the parsed name separate
+			// The Name field should remain as the user configured it
+		}
+	} else {
+		// No namespace delimiter, clear namespace and use the full name
+		model.Name = types.StringValue(node.Name)
+		model.Namespace = types.StringNull()
+	}
+
 	model.NetworkInterface = types.StringValue(node.NetworkInterface)
 	model.Owner = types.StringValue(node.Owner)
 	model.PowerInterface = types.StringValue(node.PowerInterface)

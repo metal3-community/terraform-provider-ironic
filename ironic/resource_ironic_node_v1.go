@@ -3,6 +3,7 @@ package ironic
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/appkins-org/terraform-provider-ironic/ironic/util"
 	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/v1/nodes"
@@ -874,59 +875,44 @@ func (r *nodeV1Resource) readNodeData(
 	}
 
 	// Map the API response to the model
-	model.ID = types.StringValue(node.UUID)
-	model.Name = types.StringValue(node.Name)
-	model.Driver = types.StringValue(node.Driver)
-	model.NetworkInterface = types.StringValue(node.NetworkInterface)
-	model.BootInterface = types.StringValue(node.BootInterface)
-	model.ConsoleInterface = types.StringValue(node.ConsoleInterface)
-	model.DeployInterface = types.StringValue(node.DeployInterface)
-	model.InspectInterface = types.StringValue(node.InspectInterface)
-	model.ManagementInterface = types.StringValue(node.ManagementInterface)
-	model.PowerInterface = types.StringValue(node.PowerInterface)
-	model.RAIDInterface = types.StringValue(node.RAIDInterface)
-	model.RescueInterface = types.StringValue(node.RescueInterface)
-	model.StorageInterface = types.StringValue(node.StorageInterface)
-	model.VendorInterface = types.StringValue(node.VendorInterface)
-	model.BIOSInterface = types.StringValue(node.BIOSInterface)
-	model.FirmwareInterface = types.StringValue(node.FirmwareInterface)
-
+	model.AllocationUUID = types.StringValue(node.AllocationUUID)
 	model.Automated = types.BoolValue(*node.AutomatedClean)
-	model.Protected = types.BoolValue(node.Protected)
-	model.Maintenance = types.BoolValue(node.Maintenance)
-	model.MaintenanceReason = types.StringValue(node.MaintenanceReason)
-
-	model.InstanceUUID = types.StringValue(node.InstanceUUID)
-	model.ResourceClass = types.StringValue(node.ResourceClass)
-	model.ProvisionState = types.StringValue(node.ProvisionState)
-	model.PowerState = types.StringValue(node.PowerState)
-	model.TargetProvisionState = types.StringValue(node.TargetProvisionState)
-	model.TargetPowerState = types.StringValue(node.TargetPowerState)
-	model.LastError = types.StringValue(node.LastError)
-	model.Owner = types.StringValue(node.Owner)
-	model.Lessee = types.StringValue(node.Lessee)
+	model.BIOSInterface = types.StringValue(node.BIOSInterface)
+	model.BootInterface = types.StringValue(node.BootInterface)
+	model.Chassis = types.StringValue(node.ChassisUUID)
 	model.Conductor = types.StringValue(node.Conductor)
 	model.ConductorGroup = types.StringValue(node.ConductorGroup)
-	model.AllocationUUID = types.StringValue(node.AllocationUUID)
-	model.Chassis = types.StringValue(node.ChassisUUID)
+	model.ConsoleInterface = types.StringValue(node.ConsoleInterface)
+	model.DeployInterface = types.StringValue(node.DeployInterface)
+	model.Driver = types.StringValue(node.Driver)
 	model.Fault = types.StringValue(node.Fault)
+	model.FirmwareInterface = types.StringValue(node.FirmwareInterface)
+	model.ID = types.StringValue(node.UUID)
+	model.InspectInterface = types.StringValue(node.InspectInterface)
+	model.InstanceUUID = types.StringValue(node.InstanceUUID)
+	model.LastError = types.StringValue(node.LastError)
+	model.Lessee = types.StringValue(node.Lessee)
+	model.Maintenance = types.BoolValue(node.Maintenance)
+	model.MaintenanceReason = types.StringValue(node.MaintenanceReason)
+	model.ManagementInterface = types.StringValue(node.ManagementInterface)
+	model.Name = types.StringValue(node.Name)
+	model.NetworkInterface = types.StringValue(node.NetworkInterface)
+	model.Owner = types.StringValue(node.Owner)
+	model.PowerInterface = types.StringValue(node.PowerInterface)
+	model.PowerState = types.StringValue(node.PowerState)
+	model.Protected = types.BoolValue(node.Protected)
+	model.ProvisionState = types.StringValue(node.ProvisionState)
+	model.RAIDInterface = types.StringValue(node.RAIDInterface)
+	model.RescueInterface = types.StringValue(node.RescueInterface)
+	model.ResourceClass = types.StringValue(node.ResourceClass)
+	model.StorageInterface = types.StringValue(node.StorageInterface)
+	model.TargetPowerState = types.StringValue(node.TargetPowerState)
+	model.TargetProvisionState = types.StringValue(node.TargetProvisionState)
+	model.VendorInterface = types.StringValue(node.VendorInterface)
 
-	// Handle time fields
-	if !node.CreatedAt.IsZero() {
-		model.Created = timetypes.NewRFC3339TimeValue(node.CreatedAt)
-	} else {
-		model.Created = timetypes.NewRFC3339Null()
-	}
-	if !node.UpdatedAt.IsZero() {
-		model.Updated = timetypes.NewRFC3339TimeValue(node.UpdatedAt)
-	} else {
-		model.Updated = timetypes.NewRFC3339Null()
-	}
-	if !node.ProvisionUpdatedAt.IsZero() {
-		model.ProvisionUpdated = timetypes.NewRFC3339TimeValue(node.ProvisionUpdatedAt)
-	} else {
-		model.ProvisionUpdated = timetypes.NewRFC3339Null()
-	}
+	model.Created = timeTypeOrNull(node.CreatedAt)
+	model.Updated = timeTypeOrNull(node.UpdatedAt)
+	model.ProvisionUpdated = timeTypeOrNull(node.ProvisionUpdatedAt)
 	model.InspectionStarted = timetypes.NewRFC3339TimePointerValue(node.InspectionStartedAt)
 	model.InspectionFinished = timetypes.NewRFC3339TimePointerValue(node.InspectionFinishedAt)
 
@@ -1003,6 +989,14 @@ func (r *nodeV1Resource) readNodeData(
 	}
 
 	// Handle other complex fields as needed...
+}
+
+func timeTypeOrNull(v time.Time) timetypes.RFC3339 {
+	if !v.IsZero() {
+		return timetypes.NewRFC3339TimeValue(v)
+	} else {
+		return timetypes.NewRFC3339Null()
+	}
 }
 
 // handleActionAttributes handles the action attributes (clean, inspect, available, manage).

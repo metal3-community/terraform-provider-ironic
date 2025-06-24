@@ -3,12 +3,12 @@
 page_title: "ironic_deployment Resource - ironic"
 subcategory: ""
 description: |-
-  
+  Manages an Ironic deployment resource. This drives the node through the provisioning state machine to deploy an operating system.
 ---
 
 # ironic_deployment (Resource)
 
-
+Manages an Ironic deployment resource. This drives the node through the provisioning state machine to deploy an operating system.
 
 ## Example Usage
 
@@ -34,20 +34,26 @@ resource "ironic_deployment" "masters" {
 
 ### Required
 
-- `instance_info` (Map of String)
-- `node_uuid` (String)
+- `node_uuid` (String) The UUID of the node to deploy.
 
 ### Optional
 
-- `deploy_steps` (String)
-- `fixed_ips` (List of Map of String)
-- `metadata` (Map of String)
-- `name` (String)
-- `network_data` (Map of String)
-- `user_data` (String)
-- `user_data_url` (String)
-- `user_data_url_ca_cert` (String)
-- `user_data_url_headers` (Map of String)
+- `deploy_steps` (String) Custom deploy steps to run during deployment.
+- `fixed_ips` (List of Map of String) Fixed IP addresses for the deployment.
+- `instance_info` (Dynamic) Instance information for the deployment.
+- `metadata` (Dynamic) Metadata for the config drive.
+- `name` (String) The name of the deployment.
+- `network_data` (Dynamic) Network data for the config drive.
+- `user_data` (String) User data for the config drive.
+- `user_data_url` (String) URL to fetch user data from.
+- `user_data_url_ca_cert` (String) CA certificate for user data URL.
+- `user_data_url_headers` (Dynamic) Headers to send when fetching user data.
+
+### Read-Only
+
+- `id` (String) The UUID of the deployment (same as node_uuid).
+- `last_error` (String) The last error message from the node.
+- `provision_state` (String) The current provision state of the node.
 
 ### Read-Only
 

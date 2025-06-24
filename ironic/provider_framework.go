@@ -312,6 +312,7 @@ func (p *frameworkProvider) Resources(ctx context.Context) []func() resource.Res
 		NewPortGroupV1Resource,
 		NewPortV1Resource,
 		NewAllocationV1Resource,
+		NewDeploymentResource,
 	}
 }
 

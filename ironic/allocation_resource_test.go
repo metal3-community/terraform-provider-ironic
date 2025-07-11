@@ -34,7 +34,7 @@ func TestAccIronicAllocation(t *testing.T) {
 			{
 				Config: testAccAllocationResource(nodeName, resourceClass, allocationName),
 				Check: resource.ComposeTestCheckFunc(
-					CheckNodeExists("ironic_node_v1."+nodeName, &node),
+					CheckNodeExists("ironic_node."+nodeName, &node),
 					testAccCheckAllocationExists(
 						"ironic_allocation_v1."+allocationName,
 						&allocation,
@@ -59,7 +59,7 @@ func TestAccIronicAllocation(t *testing.T) {
 				Config: testAccAllocationResource(nodeName, resourceClass, allocationName),
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckResourceAttrPtr(
-						"ironic_node_v1."+nodeName,
+						"ironic_node."+nodeName,
 						"instance_uuid",
 						&allocation.UUID,
 					),
@@ -210,7 +210,7 @@ func testAccAllocationDestroy(state *terraform.State) error {
 // Create the resource declaration for a node, and an allocation that should consume it.
 func testAccAllocationResource(node, resourceClass, allocation string) string {
 	return fmt.Sprintf(`
-		resource "ironic_node_v1" "%s" {
+		resource "ironic_node" "%s" {
 			name = "%s"
 			driver = "fake-hardware"
 			available = true
@@ -228,7 +228,7 @@ func testAccAllocationResource(node, resourceClass, allocation string) string {
 			name = "%s"
 			resource_class = "%s"
 			candidate_nodes = [
-				"${ironic_node_v1.%s.id}"
+				"${ironic_node.%s.id}"
 			]
 		}`, node, node, resourceClass, allocation, allocation, resourceClass, node)
 }

@@ -38,7 +38,7 @@ func TestAccIronicDeployment(t *testing.T) {
 			{
 				Config: testAccDeploymentResource(nodeName, resourceClass, allocationName),
 				Check: resource.ComposeTestCheckFunc(
-					testAccCheckNodeExists("ironic_node_v1."+nodeName, &node),
+					testAccCheckNodeExists("ironic_node."+nodeName, &node),
 					resource.TestCheckResourceAttr(
 						"ironic_deployment."+nodeName,
 						"provision_state",
@@ -93,7 +93,7 @@ func testAccDeploymentDestroy(state *terraform.State) error {
 
 func testAccDeploymentResource(node, resourceClass, allocation string) string {
 	return fmt.Sprintf(`
-		resource "ironic_node_v1" "%s" {
+		resource "ironic_node" "%s" {
 			name = "%s"
 			driver = "fake-hardware"
 			available = true
@@ -111,7 +111,7 @@ func testAccDeploymentResource(node, resourceClass, allocation string) string {
 			name = "%s"
 			resource_class = "%s"
 			candidate_nodes = [
-				"${ironic_node_v1.%s.id}"
+				"${ironic_node.%s.id}"
 			]
 		}
 
@@ -287,7 +287,7 @@ func TestAccIronicDeployment_migration(t *testing.T) {
 				},
 				Config: testAccDeploymentResourceSDK(nodeName, resourceClass, allocationName),
 				Check: resource.ComposeTestCheckFunc(
-					testAccCheckNodeExistsSDK("ironic_node_v1."+nodeName, &node),
+					testAccCheckNodeExistsSDK("ironic_node."+nodeName, &node),
 					resource.TestCheckResourceAttr(
 						"ironic_deployment."+nodeName,
 						"provision_state",
@@ -314,7 +314,7 @@ func TestAccIronicDeployment_migration(t *testing.T) {
 
 func testAccDeploymentResourceSDK(node, resourceClass, allocation string) string {
 	return fmt.Sprintf(`
-		resource "ironic_node_v1" "%s" {
+		resource "ironic_node" "%s" {
 			name = "%s"
 			driver = "fake-hardware"
 			available = true
@@ -332,7 +332,7 @@ func testAccDeploymentResourceSDK(node, resourceClass, allocation string) string
 			name = "%s"
 			resource_class = "%s"
 			candidate_nodes = [
-				"${ironic_node_v1.%s.id}"
+				"${ironic_node.%s.id}"
 			]
 		}
 

@@ -28,15 +28,15 @@ func TestAccIronicPortV1_basic(t *testing.T) {
 			{
 				Config: testAccPortV1Basic(portName),
 				Check: resource.ComposeTestCheckFunc(
-					testAccCheckPortV1Exists("ironic_port_v1.port_1", &port),
+					testAccCheckPortV1Exists("ironic_port.port_1", &port),
 					resource.TestCheckResourceAttr(
-						"ironic_port_v1.port_1",
+						"ironic_port.port_1",
 						"address",
 						"52:54:00:cf:2d:31",
 					),
-					resource.TestCheckResourceAttr("ironic_port_v1.port_1", "pxe_enabled", "true"),
+					resource.TestCheckResourceAttr("ironic_port.port_1", "pxe_enabled", "true"),
 					resource.TestCheckResourceAttr(
-						"ironic_port_v1.port_1",
+						"ironic_port.port_1",
 						"is_smart_nic",
 						"false",
 					),
@@ -60,15 +60,15 @@ func TestAccIronicPortV1_withNode(t *testing.T) {
 			{
 				Config: testAccPortV1WithNode(nodeName, portName),
 				Check: resource.ComposeTestCheckFunc(
-					CheckNodeExists("ironic_node_v1.node_1", &node),
-					testAccCheckPortV1Exists("ironic_port_v1.port_1", &port),
+					CheckNodeExists("ironic_node.node_1", &node),
+					testAccCheckPortV1Exists("ironic_port.port_1", &port),
 					resource.TestCheckResourceAttr(
-						"ironic_port_v1.port_1",
+						"ironic_port.port_1",
 						"address",
 						"52:54:00:cf:2d:32",
 					),
 					resource.TestCheckResourceAttrPtr(
-						"ironic_port_v1.port_1",
+						"ironic_port.port_1",
 						"node_uuid",
 						&node.UUID,
 					),
@@ -90,9 +90,9 @@ func TestAccIronicPortV1_localLinkConnection(t *testing.T) {
 			{
 				Config: testAccPortV1LocalLinkConnection(portName),
 				Check: resource.ComposeTestCheckFunc(
-					testAccCheckPortV1Exists("ironic_port_v1.port_1", &port),
+					testAccCheckPortV1Exists("ironic_port.port_1", &port),
 					resource.TestCheckResourceAttr(
-						"ironic_port_v1.port_1",
+						"ironic_port.port_1",
 						"address",
 						"52:54:00:cf:2d:33",
 					),
@@ -114,27 +114,27 @@ func TestAccIronicPortV1_update(t *testing.T) {
 			{
 				Config: testAccPortV1Basic(portName),
 				Check: resource.ComposeTestCheckFunc(
-					testAccCheckPortV1Exists("ironic_port_v1.port_1", &port),
+					testAccCheckPortV1Exists("ironic_port.port_1", &port),
 					resource.TestCheckResourceAttr(
-						"ironic_port_v1.port_1",
+						"ironic_port.port_1",
 						"address",
 						"52:54:00:cf:2d:31",
 					),
-					resource.TestCheckResourceAttr("ironic_port_v1.port_1", "pxe_enabled", "true"),
+					resource.TestCheckResourceAttr("ironic_port.port_1", "pxe_enabled", "true"),
 				),
 			},
 			{
 				Config: testAccPortV1Update(portName),
 				Check: resource.ComposeTestCheckFunc(
-					testAccCheckPortV1Exists("ironic_port_v1.port_1", &port),
+					testAccCheckPortV1Exists("ironic_port.port_1", &port),
 					resource.TestCheckResourceAttr(
-						"ironic_port_v1.port_1",
+						"ironic_port.port_1",
 						"address",
 						"52:54:00:cf:2d:31",
 					),
-					resource.TestCheckResourceAttr("ironic_port_v1.port_1", "pxe_enabled", "false"),
+					resource.TestCheckResourceAttr("ironic_port.port_1", "pxe_enabled", "false"),
 					resource.TestCheckResourceAttr(
-						"ironic_port_v1.port_1",
+						"ironic_port.port_1",
 						"physical_network",
 						"provisioning",
 					),
@@ -156,7 +156,7 @@ func TestAccIronicPortV1_importBasic(t *testing.T) {
 				Config: testAccPortV1Basic(portName),
 			},
 			{
-				ResourceName:      "ironic_port_v1.port_1",
+				ResourceName:      "ironic_port.port_1",
 				ImportState:       true,
 				ImportStateVerify: true,
 			},
@@ -180,9 +180,9 @@ func TestAccIronicPortV1_migration(t *testing.T) {
 				},
 				Config: testAccPortV1BasicSDK(portName),
 				Check: resource.ComposeTestCheckFunc(
-					testAccCheckPortV1ExistsSDK("ironic_port_v1.port_1", &port),
+					testAccCheckPortV1ExistsSDK("ironic_port.port_1", &port),
 					resource.TestCheckResourceAttr(
-						"ironic_port_v1.port_1",
+						"ironic_port.port_1",
 						"address",
 						"52:54:00:cf:2d:31",
 					),
@@ -192,9 +192,9 @@ func TestAccIronicPortV1_migration(t *testing.T) {
 				ProtoV5ProviderFactories: protoV5ProviderFactories(),
 				Config:                   testAccPortV1Basic(portName),
 				Check: resource.ComposeTestCheckFunc(
-					testAccCheckPortV1Exists("ironic_port_v1.port_1", &port),
+					testAccCheckPortV1Exists("ironic_port.port_1", &port),
 					resource.TestCheckResourceAttr(
-						"ironic_port_v1.port_1",
+						"ironic_port.port_1",
 						"address",
 						"52:54:00:cf:2d:31",
 					),
@@ -211,7 +211,7 @@ func testAccCheckPortV1Destroy(s *terraform.State) error {
 	}
 
 	for _, rs := range s.RootModule().Resources {
-		if rs.Type != "ironic_port_v1" {
+		if rs.Type != "ironic_port" {
 			continue
 		}
 
@@ -297,7 +297,7 @@ func testAccCheckPortV1ExistsSDK(n string, port *ports.Port) resource.TestCheckF
 
 func testAccPortV1Basic(portName string) string {
 	return fmt.Sprintf(`
-resource "ironic_port_v1" "port_1" {
+resource "ironic_port" "port_1" {
   address = "52:54:00:cf:2d:31"
   pxe_enabled = true
 }`)
@@ -309,13 +309,13 @@ func testAccPortV1BasicSDK(portName string) string {
 
 func testAccPortV1WithNode(nodeName, portName string) string {
 	return fmt.Sprintf(`
-resource "ironic_node_v1" "node_1" {
+resource "ironic_node" "node_1" {
   name   = "%s"
   driver = "fake-hardware"
 }
 
-resource "ironic_port_v1" "port_1" {
-  node_uuid   = ironic_node_v1.node_1.id
+resource "ironic_port" "port_1" {
+  node_uuid   = ironic_node.node_1.id
   address     = "52:54:00:cf:2d:32"
   pxe_enabled = false
 }`, nodeName)
@@ -323,7 +323,7 @@ resource "ironic_port_v1" "port_1" {
 
 func testAccPortV1LocalLinkConnection(portName string) string {
 	return fmt.Sprintf(`
-resource "ironic_port_v1" "port_1" {
+resource "ironic_port" "port_1" {
   address = "52:54:00:cf:2d:33"
   local_link_connection = {
     switch_id   = "0a:1b:2c:3d:4e:5f"
@@ -335,7 +335,7 @@ resource "ironic_port_v1" "port_1" {
 
 func testAccPortV1Update(portName string) string {
 	return fmt.Sprintf(`
-resource "ironic_port_v1" "port_1" {
+resource "ironic_port" "port_1" {
   address          = "52:54:00:cf:2d:31"
   pxe_enabled      = false
   physical_network = "provisioning"

@@ -4,9 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
+	"github.com/appkins-org/terraform-provider-ironic/ironic/util/retry"
+	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/httpbasic"
 	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/noauth"
+	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/v1/conductors"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
@@ -15,6 +19,11 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
+
+// Meta stores the client connection information for Ironic.
+type Meta struct {
+	Client *gophercloud.ServiceClient
+}
 
 // Shared descriptions for provider attributes to ensure consistency.
 var frameworkDescriptions = map[string]string{
@@ -29,19 +38,19 @@ var frameworkDescriptions = map[string]string{
 	"inspector_password": "Password to be used by Ironic Inspector when using `http_basic` authentication",
 }
 
-// ironicProvider is a type that implements the terraform-plugin-framework
+// IronicProvider is a type that implements the terraform-plugin-framework
 // provider.Provider interface. Someday, this will probably encompass the entire
 // behavior of the ironic provider. Today, it is a small but growing subset.
-type ironicProvider struct{}
+type IronicProvider struct{}
 
 var (
-	_ provider.Provider                       = &ironicProvider{}
-	_ provider.ProviderWithEphemeralResources = &ironicProvider{}
+	_ provider.Provider                       = &IronicProvider{}
+	_ provider.ProviderWithEphemeralResources = &IronicProvider{}
 )
 
-// FrameworkProviderConfig is a helper type for extracting the provider
+// IronicProviderModel is a helper type for extracting the provider
 // configuration from the provider block.
-type FrameworkProviderConfig struct {
+type IronicProviderModel struct {
 	Url               types.String `tfsdk:"url"`
 	Inspector         types.String `tfsdk:"inspector"`
 	Microversion      types.String `tfsdk:"microversion"`
@@ -57,14 +66,14 @@ type FrameworkProviderConfig struct {
 // the ironic provider implemented via the terraform-plugin-framework.
 func New() func() provider.Provider {
 	return func() provider.Provider {
-		return &ironicProvider{}
+		return &IronicProvider{}
 	}
 }
 
 // Metadata (a Provider interface function) lets the provider identify itself.
 // Resources and data sources can access this information from their request
 // objects.
-func (p *ironicProvider) Metadata(
+func (p *IronicProvider) Metadata(
 	_ context.Context,
 	_ provider.MetadataRequest,
 	res *provider.MetadataResponse,
@@ -74,7 +83,7 @@ func (p *ironicProvider) Metadata(
 
 // Schema (a Provider interface function) returns the schema for the Terraform
 // block that configures the provider itself.
-func (p *ironicProvider) Schema(
+func (p *IronicProvider) Schema(
 	_ context.Context,
 	_ provider.SchemaRequest,
 	res *provider.SchemaResponse,
@@ -125,13 +134,13 @@ func (p *ironicProvider) Schema(
 
 // Configure (a Provider interface function) sets up the Ironic client per the
 // specified provider configuration block and env vars.
-func (p *ironicProvider) Configure(
+func (p *IronicProvider) Configure(
 	ctx context.Context,
 	req provider.ConfigureRequest,
 	res *provider.ConfigureResponse,
 ) {
-	var clients Clients
-	var data FrameworkProviderConfig
+	var meta Meta
+	var data IronicProviderModel
 	diags := req.Config.Get(ctx, &data)
 
 	res.Diagnostics.Append(diags...)
@@ -209,7 +218,7 @@ func (p *ironicProvider) Configure(
 		}
 
 		ironic.Microversion = microversion
-		clients.ironic = ironic
+		meta.Client = ironic
 
 	} else {
 		tflog.Debug(ctx, "Using noauth auth_strategy")
@@ -224,36 +233,100 @@ func (p *ironicProvider) Configure(
 			return
 		}
 		ironic.Microversion = microversion
-		clients.ironic = ironic
+		meta.Client = ironic
 	}
 
 	// Set timeout with default value of 0
-	timeout := int(data.Timeout.ValueInt64())
-	clients.timeout = timeout
+	timeout := time.Second * 120
 
-	res.DataSourceData = &clients
-	res.ResourceData = &clients
-	res.EphemeralResourceData = &clients
+	if err := retry.RetryContext(ctx, timeout, func() *retry.RetryError {
+		tflog.Debug(ctx, "Checking Ironic API availability", map[string]any{"timeout": timeout})
+		err := healthCheck(ctx, meta.Client)
+		if err != nil {
+			return retry.RetryableError(err)
+		}
+		tflog.Info(ctx, "Ironic API is available")
+		return nil
+	}); err != nil {
+		res.Diagnostics.AddError(
+			"Could not connect to Ironic API",
+			fmt.Sprintf("Error: %s", err.Error()),
+		)
+		return
+	}
+
+	res.DataSourceData = &meta
+	res.ResourceData = &meta
+	res.EphemeralResourceData = &meta
 }
 
-func (p *ironicProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
+func (p *IronicProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
 		NewNodeInventoryDataSource,
 	}
 }
 
-func (p *ironicProvider) Resources(ctx context.Context) []func() resource.Resource {
+func (p *IronicProvider) Resources(ctx context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
-		NewNodeV1Resource,
-		NewPortGroupV1Resource,
+		NewNodeResource,
+		NewPortGroupResource,
 		NewPortV1Resource,
 		NewAllocationV1Resource,
 		NewDeploymentResource,
 	}
 }
 
-func (p *ironicProvider) EphemeralResources(
+func (p *IronicProvider) EphemeralResources(
 	ctx context.Context,
 ) []func() ephemeral.EphemeralResource {
 	return []func() ephemeral.EphemeralResource{}
+}
+
+func healthCheck(ctx context.Context, client *gophercloud.ServiceClient) error {
+	// Perform a simple health check by making a request to the API.
+	// This is a placeholder for actual health check logic.
+	pages, err := conductors.List(client, conductors.ListOpts{}).AllPages(ctx)
+	if err != nil {
+		return fmt.Errorf("ironic API health check failed: %w", err)
+	}
+
+	conductorsList, err := conductors.ExtractConductors(pages)
+	if err != nil {
+		return fmt.Errorf("failed to extract conductors from Ironic API response: %w",
+			err)
+	}
+	for _, conductor := range conductorsList {
+		if !conductor.Alive {
+			tflog.Error(ctx, "Conductor is not alive", map[string]any{
+				"hostname": conductor.Hostname,
+				"alive":    conductor.Alive,
+				"drivers":  conductor.Drivers,
+			})
+			return fmt.Errorf("ironic API health check failed: conductor %s is not alive",
+				conductor.Hostname)
+		}
+		if len(conductor.Drivers) == 0 {
+			tflog.Error(ctx, "Conductor has no drivers", map[string]any{
+				"hostname": conductor.Hostname,
+				"drivers":  conductor.Drivers,
+			})
+			return fmt.Errorf(
+				"ironic API health check failed: conductor %s has no drivers",
+				conductor.Hostname,
+			)
+		}
+		tflog.Info(ctx, "Conductor is alive", map[string]any{
+			"hostname":   conductor.Hostname,
+			"drivers":    conductor.Drivers,
+			"alive":      conductor.Alive,
+			"group":      conductor.ConductorGroup,
+			"created_at": conductor.CreatedAt,
+			"updated_at": conductor.UpdatedAt,
+		})
+	}
+	// If we reach here, the API is considered healthy.
+	tflog.Info(ctx, "Ironic API is healthy", map[string]any{
+		"client": client.Endpoint,
+	})
+	return nil
 }

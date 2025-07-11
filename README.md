@@ -42,7 +42,7 @@ i.e. deploy the node - use a deployment resource instead.
 
 
 ```terraform
-resource "ironic_node_v1" "openshift-master-0" {
+resource "ironic_node" "openshift-master-0" {
   name = "openshift-master-0"
 
   inspect   = true # Perform inspection
@@ -75,12 +75,12 @@ resource "ironic_node_v1" "openshift-master-0" {
 
 ## Ports
 
-Ports may be specified as part of the node resource, or as a separate `ironic_port_v1`
+Ports may be specified as part of the node resource, or as a separate `ironic_port`
 declaration.
 
 ```terraform
-resource "ironic_port_v1" "openshift-master-0-port-0" {
-  node_uuid   = ironic_node_v1.openshift-master-0.id
+resource "ironic_port" "openshift-master-0-port-0" {
+  node_uuid   = ironic_node.openshift-master-0.id
   pxe_enabled = true
   address     = "00:bb:4a:d0:5e:38"
 }
@@ -99,9 +99,9 @@ resource "ironic_allocation_v1" "openshift-master-allocation" {
   resource_class = "baremetal"
 
   candidate_nodes = [
-    ironic_node_v1.openshift-master-0.id,
-    ironic_node_v1.openshift-master-1.id,
-    ironic_node_v1.openshift-master-2.id,
+    ironic_node.openshift-master-0.id,
+    ironic_node.openshift-master-1.id,
+    ironic_node.openshift-master-2.id,
   ]
 
   traits = [
@@ -151,7 +151,7 @@ interface information, number of CPU's and architecture, and memory.
 
 ```terraform
 data "ironic_introspection" "openshift-master-0" {
-  uuid = ironic_node_v1.openshift-master-0.id
+  uuid = ironic_node.openshift-master-0.id
 }
 ```
 

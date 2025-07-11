@@ -19,18 +19,18 @@ import (
 
 // Ensure the implementation satisfies the expected interfaces.
 var (
-	_ resource.Resource                = &portGroupV1Resource{}
-	_ resource.ResourceWithConfigure   = &portGroupV1Resource{}
-	_ resource.ResourceWithImportState = &portGroupV1Resource{}
+	_ resource.Resource                = &PortGroupResource{}
+	_ resource.ResourceWithConfigure   = &PortGroupResource{}
+	_ resource.ResourceWithImportState = &PortGroupResource{}
 )
 
-// portGroupV1Resource defines the resource implementation.
-type portGroupV1Resource struct {
-	clients *Clients
+// PortGroupResource defines the resource implementation.
+type PortGroupResource struct {
+	meta *Meta
 }
 
-// portGroupV1ResourceModel describes the resource data model.
-type portGroupV1ResourceModel struct {
+// PortGroupResourceModel describes the resource data model.
+type PortGroupResourceModel struct {
 	ID       types.String  `tfsdk:"id"`
 	UUID     types.String  `tfsdk:"uuid"`
 	NodeUUID types.String  `tfsdk:"node_uuid"`
@@ -40,19 +40,19 @@ type portGroupV1ResourceModel struct {
 	Extra    types.Dynamic `tfsdk:"extra"`
 }
 
-func NewPortGroupV1Resource() resource.Resource {
-	return &portGroupV1Resource{}
+func NewPortGroupResource() resource.Resource {
+	return &PortGroupResource{}
 }
 
-func (r *portGroupV1Resource) Metadata(
+func (r *PortGroupResource) Metadata(
 	ctx context.Context,
 	req resource.MetadataRequest,
 	resp *resource.MetadataResponse,
 ) {
-	resp.TypeName = req.ProviderTypeName + "_portgroup_v1"
+	resp.TypeName = req.ProviderTypeName + "_port_group"
 }
 
-func (r *portGroupV1Resource) Schema(
+func (r *PortGroupResource) Schema(
 	ctx context.Context,
 	req resource.SchemaRequest,
 	resp *resource.SchemaResponse,
@@ -125,7 +125,7 @@ func (r *portGroupV1Resource) Schema(
 	}
 }
 
-func (r *portGroupV1Resource) Configure(
+func (r *PortGroupResource) Configure(
 	ctx context.Context,
 	req resource.ConfigureRequest,
 	resp *resource.ConfigureResponse,
@@ -134,7 +134,7 @@ func (r *portGroupV1Resource) Configure(
 		return
 	}
 
-	clients, ok := req.ProviderData.(*Clients)
+	clients, ok := req.ProviderData.(*Meta)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Configure Type",
@@ -146,30 +146,20 @@ func (r *portGroupV1Resource) Configure(
 		return
 	}
 
-	r.clients = clients
+	r.meta = clients
 }
 
-func (r *portGroupV1Resource) Create(
+func (r *PortGroupResource) Create(
 	ctx context.Context,
 	req resource.CreateRequest,
 	resp *resource.CreateResponse,
 ) {
-	var plan portGroupV1ResourceModel
+	var plan PortGroupResourceModel
 
 	// Get the plan
 	diags := req.Plan.Get(ctx, &plan)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	// Get the ironic client
-	client, err := r.clients.GetIronicClient()
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Error getting Ironic client",
-			fmt.Sprintf("Could not get Ironic client: %s", err),
-		)
 		return
 	}
 
@@ -220,7 +210,7 @@ func (r *portGroupV1Resource) Create(
 	}
 
 	// Create the portgroup
-	portgroup, err := portgroups.Create(ctx, client, createOpts).Extract()
+	portgroup, err := portgroups.Create(ctx, r.meta.Client, createOpts).Extract()
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error creating portgroup",
@@ -243,12 +233,12 @@ func (r *portGroupV1Resource) Create(
 	resp.Diagnostics.Append(diags...)
 }
 
-func (r *portGroupV1Resource) Read(
+func (r *PortGroupResource) Read(
 	ctx context.Context,
 	req resource.ReadRequest,
 	resp *resource.ReadResponse,
 ) {
-	var state portGroupV1ResourceModel
+	var state PortGroupResourceModel
 
 	// Get current state
 	diags := req.State.Get(ctx, &state)
@@ -268,7 +258,7 @@ func (r *portGroupV1Resource) Read(
 	resp.Diagnostics.Append(diags...)
 }
 
-func (r *portGroupV1Resource) Update(
+func (r *PortGroupResource) Update(
 	ctx context.Context,
 	req resource.UpdateRequest,
 	resp *resource.UpdateResponse,
@@ -281,12 +271,12 @@ func (r *portGroupV1Resource) Update(
 	)
 }
 
-func (r *portGroupV1Resource) Delete(
+func (r *PortGroupResource) Delete(
 	ctx context.Context,
 	req resource.DeleteRequest,
 	resp *resource.DeleteResponse,
 ) {
-	var state portGroupV1ResourceModel
+	var state PortGroupResourceModel
 
 	// Get current state
 	diags := req.State.Get(ctx, &state)
@@ -295,18 +285,8 @@ func (r *portGroupV1Resource) Delete(
 		return
 	}
 
-	// Get the ironic client
-	client, err := r.clients.GetIronicClient()
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Error getting Ironic client",
-			fmt.Sprintf("Could not get Ironic client: %s", err),
-		)
-		return
-	}
-
 	// Delete the portgroup
-	err = portgroups.Delete(ctx, client, state.ID.ValueString()).ExtractErr()
+	err := portgroups.Delete(ctx, r.meta.Client, state.ID.ValueString()).ExtractErr()
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error deleting portgroup",
@@ -316,7 +296,7 @@ func (r *portGroupV1Resource) Delete(
 	}
 }
 
-func (r *portGroupV1Resource) ImportState(
+func (r *PortGroupResource) ImportState(
 	ctx context.Context,
 	req resource.ImportStateRequest,
 	resp *resource.ImportStateResponse,
@@ -325,7 +305,7 @@ func (r *portGroupV1Resource) ImportState(
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 
 	// Read the portgroup data
-	var state portGroupV1ResourceModel
+	var state PortGroupResourceModel
 	state.ID = types.StringValue(req.ID)
 
 	r.readPortgroupData(ctx, &state, &resp.Diagnostics)
@@ -339,21 +319,12 @@ func (r *portGroupV1Resource) ImportState(
 }
 
 // Helper function to read portgroup data from the API and populate the model.
-func (r *portGroupV1Resource) readPortgroupData(
+func (r *PortGroupResource) readPortgroupData(
 	ctx context.Context,
-	model *portGroupV1ResourceModel,
+	model *PortGroupResourceModel,
 	diagnostics *diag.Diagnostics,
 ) {
-	client, err := r.clients.GetIronicClient()
-	if err != nil {
-		diagnostics.AddError(
-			"Error getting Ironic client",
-			fmt.Sprintf("Could not get Ironic client: %s", err),
-		)
-		return
-	}
-
-	portgroup, err := portgroups.Get(ctx, client, model.ID.ValueString()).Extract()
+	portgroup, err := portgroups.Get(ctx, r.meta.Client, model.ID.ValueString()).Extract()
 	if err != nil {
 		diagnostics.AddError(
 			"Error reading portgroup",

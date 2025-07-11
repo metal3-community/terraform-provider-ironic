@@ -1,4 +1,4 @@
-resource "ironic_node_v1" "openshift-master-0" {
+resource "ironic_node" "openshift-master-0" {
   name = "openshift-master-0"
 
   inspect   = true # Perform inspection

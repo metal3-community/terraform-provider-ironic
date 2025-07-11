@@ -21,7 +21,7 @@ var (
 
 // NodeInventoryDataSource defines the data source implementation.
 type NodeInventoryDataSource struct {
-	clients *Clients
+	meta *Meta
 }
 
 // inventoryDataSourceModel describes the data source data model.
@@ -97,7 +97,7 @@ func (d *NodeInventoryDataSource) Metadata(
 	req datasource.MetadataRequest,
 	resp *datasource.MetadataResponse,
 ) {
-	resp.TypeName = req.ProviderTypeName + "_node_inventory"
+	resp.TypeName = req.ProviderTypeName + "_inventory"
 }
 
 func (d *NodeInventoryDataSource) Schema(
@@ -302,7 +302,7 @@ func (d *NodeInventoryDataSource) Configure(
 		return
 	}
 
-	clients, ok := req.ProviderData.(*Clients)
+	clients, ok := req.ProviderData.(*Meta)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Data Source Configure Type",
@@ -314,7 +314,7 @@ func (d *NodeInventoryDataSource) Configure(
 		return
 	}
 
-	d.clients = clients
+	d.meta = clients
 }
 
 func (d *NodeInventoryDataSource) Read(
@@ -330,22 +330,12 @@ func (d *NodeInventoryDataSource) Read(
 		return
 	}
 
-	// Get Ironic client
-	client, err := d.clients.GetIronicClient()
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unable to Get Ironic Client",
-			fmt.Sprintf("Unable to get Ironic client: %s", err),
-		)
-		return
-	}
-
 	nodeUUID := config.UUID.ValueString()
 	tflog.Debug(ctx, "Getting inventory data for node", map[string]any{"uuid": nodeUUID})
 	var inventoryData *models.InventoryData
 
 	// Get inventory data using nodes.GetInventory
-	err = nodes.GetInventory(ctx, client, nodeUUID).ExtractInto(&inventoryData)
+	err := nodes.GetInventory(ctx, d.meta.Client, nodeUUID).ExtractInto(&inventoryData)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Unable to Get Node Inventory",

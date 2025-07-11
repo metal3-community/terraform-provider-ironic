@@ -1,5 +1,5 @@
 # Create a node first
-resource "ironic_node_v1" "example_node" {
+resource "ironic_node" "example_node" {
   name   = "example-node"
   driver = "ipmi"
 
@@ -11,15 +11,15 @@ resource "ironic_node_v1" "example_node" {
 }
 
 # Basic port configuration
-resource "ironic_port_v1" "basic_port" {
-  node_uuid   = ironic_node_v1.example_node.id
+resource "ironic_port" "basic_port" {
+  node_uuid   = ironic_node.example_node.id
   address     = "00:bb:4a:d0:5e:38"
   pxe_enabled = true
 }
 
 # Port with local link connection for switch connectivity
-resource "ironic_port_v1" "switch_port" {
-  node_uuid   = ironic_node_v1.example_node.id
+resource "ironic_port" "switch_port" {
+  node_uuid   = ironic_node.example_node.id
   address     = "00:bb:4a:d0:5e:39"
   pxe_enabled = false
 
@@ -33,7 +33,7 @@ resource "ironic_port_v1" "switch_port" {
 }
 
 # Smart NIC port with extra metadata
-resource "ironic_port_v1" "smart_nic_port" {
+resource "ironic_port" "smart_nic_port" {
   address      = "00:bb:4a:d0:5e:40"
   is_smart_nic = true
 

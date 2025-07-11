@@ -39,7 +39,7 @@ var (
 
 // deploymentResource defines the resource implementation.
 type deploymentResource struct {
-	clients *Clients
+	meta *Meta
 }
 
 type fixedIpModel struct {
@@ -234,7 +234,7 @@ func (r *deploymentResource) Configure(
 		return
 	}
 
-	clients, ok := req.ProviderData.(*Clients)
+	clients, ok := req.ProviderData.(*Meta)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Configure Type",
@@ -246,7 +246,7 @@ func (r *deploymentResource) Configure(
 		return
 	}
 
-	r.clients = clients
+	r.meta = clients
 }
 
 func (r *deploymentResource) Create(
@@ -261,15 +261,6 @@ func (r *deploymentResource) Create(
 		return
 	}
 
-	client, err := GetIronicClient(ctx, r.clients)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Error getting Ironic client",
-			fmt.Sprintf("Could not get Ironic client: %s", err),
-		)
-		return
-	}
-
 	nodeUUID := model.NodeUUID.ValueString()
 	model.ID = model.NodeUUID
 
@@ -277,7 +268,7 @@ func (r *deploymentResource) Create(
 		"node_uuid": nodeUUID,
 	})
 
-	node, err := nodes.Get(ctx, client, nodeUUID).Extract()
+	node, err := nodes.Get(ctx, r.meta.Client, nodeUUID).Extract()
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			resp.Diagnostics.AddError(
@@ -351,7 +342,7 @@ func (r *deploymentResource) Create(
 				Value: fixedIPsInterface,
 			})
 
-			_, err = UpdateNode(ctx, client, nodeUUID, updateOpts)
+			_, err = UpdateNode(ctx, r.meta.Client, nodeUUID, updateOpts)
 			if err != nil {
 				resp.Diagnostics.AddError(
 					"Error updating fixed_ips",
@@ -440,7 +431,7 @@ func (r *deploymentResource) Create(
 	}
 
 	configDrive, err := buildConfigDrive(
-		client.Microversion,
+		r.meta.Client.Microversion,
 		userDataMap,
 		networkDataMap,
 		metaDataMap,
@@ -461,7 +452,7 @@ func (r *deploymentResource) Create(
 
 	if err := ChangeProvisionStateToTarget(
 		ctx,
-		client,
+		r.meta.Client,
 		nodeUUID,
 		TargetActive,
 		configDrive,
@@ -517,15 +508,6 @@ func (r *deploymentResource) read(
 	model *deploymentResourceModel,
 	diagnostics *diag.Diagnostics,
 ) {
-	client, err := GetIronicClient(ctx, r.clients)
-	if err != nil {
-		diagnostics.AddError(
-			"Error getting Ironic client",
-			fmt.Sprintf("Could not get Ironic client: %s", err),
-		)
-		return
-	}
-
 	nodeUUID := model.NodeUUID.ValueString()
 	if nodeUUID == "" {
 		nodeUUID = model.ID.ValueString()
@@ -535,7 +517,7 @@ func (r *deploymentResource) read(
 		"node_uuid": nodeUUID,
 	})
 
-	result, err := nodes.Get(ctx, client, nodeUUID).Extract()
+	result, err := nodes.Get(ctx, r.meta.Client, nodeUUID).Extract()
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			diagnostics.AddWarning(
@@ -582,15 +564,6 @@ func (r *deploymentResource) Delete(
 		return
 	}
 
-	client, err := GetIronicClient(ctx, r.clients)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Error getting Ironic client",
-			fmt.Sprintf("Could not get Ironic client: %s", err),
-		)
-		return
-	}
-
 	nodeUUID := model.ID.ValueString()
 
 	tflog.Info(ctx, "Deleting deployment", map[string]any{
@@ -599,7 +572,7 @@ func (r *deploymentResource) Delete(
 
 	if err := ChangeProvisionStateToTarget(
 		ctx,
-		client,
+		r.meta.Client,
 		nodeUUID,
 		TargetDeleted,
 		nil,

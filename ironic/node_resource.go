@@ -31,18 +31,18 @@ const (
 
 // Ensure the implementation satisfies the expected interfaces.
 var (
-	_ resource.Resource                = &nodeV1Resource{}
-	_ resource.ResourceWithConfigure   = &nodeV1Resource{}
-	_ resource.ResourceWithImportState = &nodeV1Resource{}
+	_ resource.Resource                = &NodeResource{}
+	_ resource.ResourceWithConfigure   = &NodeResource{}
+	_ resource.ResourceWithImportState = &NodeResource{}
 )
 
-// nodeV1Resource defines the resource implementation.
-type nodeV1Resource struct {
-	clients *Clients
+// NodeResource defines the resource implementation.
+type NodeResource struct {
+	meta *Meta
 }
 
-// nodeV1ResourceModel describes the resource data model.
-type nodeV1ResourceModel struct {
+// NodeResourceModel describes the resource data model.
+type NodeResourceModel struct {
 	ID                   types.String      `tfsdk:"id"`
 	Name                 types.String      `tfsdk:"name"`
 	Namespace            types.String      `tfsdk:"namespace"`
@@ -77,7 +77,7 @@ type nodeV1ResourceModel struct {
 	ManagementInterface  types.String      `tfsdk:"management_interface"`
 	NetworkInterface     types.String      `tfsdk:"network_interface"`
 	Owner                types.String      `tfsdk:"owner"`
-	Ports                []nodeV1PortModel `tfsdk:"ports"`
+	Ports                []NodePortModel   `tfsdk:"ports"`
 	PowerInterface       types.String      `tfsdk:"power_interface"`
 	PowerState           types.String      `tfsdk:"power_state"`
 	Properties           types.Dynamic     `tfsdk:"properties"`
@@ -97,25 +97,25 @@ type nodeV1ResourceModel struct {
 	ProvisionUpdated     timetypes.RFC3339 `tfsdk:"provision_updated_at"`
 }
 
-// nodeV1PortModel describes the port data model within the node.
-type nodeV1PortModel struct {
+// NodePortModel describes the port data model within the node.
+type NodePortModel struct {
 	UUID       types.String `tfsdk:"uuid"`
 	MACAddress types.String `tfsdk:"mac_address"`
 }
 
-func NewNodeV1Resource() resource.Resource {
-	return &nodeV1Resource{}
+func NewNodeResource() resource.Resource {
+	return &NodeResource{}
 }
 
-func (r *nodeV1Resource) Metadata(
+func (r *NodeResource) Metadata(
 	ctx context.Context,
 	req resource.MetadataRequest,
 	resp *resource.MetadataResponse,
 ) {
-	resp.TypeName = req.ProviderTypeName + "_node_v1"
+	resp.TypeName = req.ProviderTypeName + "_node"
 }
 
-func (r *nodeV1Resource) Schema(
+func (r *NodeResource) Schema(
 	ctx context.Context,
 	req resource.SchemaRequest,
 	resp *resource.SchemaResponse,
@@ -500,7 +500,7 @@ func (r *nodeV1Resource) Schema(
 	}
 }
 
-func (r *nodeV1Resource) Configure(
+func (r *NodeResource) Configure(
 	ctx context.Context,
 	req resource.ConfigureRequest,
 	resp *resource.ConfigureResponse,
@@ -509,7 +509,7 @@ func (r *nodeV1Resource) Configure(
 		return
 	}
 
-	clients, ok := req.ProviderData.(*Clients)
+	clients, ok := req.ProviderData.(*Meta)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Configure Type",
@@ -521,15 +521,15 @@ func (r *nodeV1Resource) Configure(
 		return
 	}
 
-	r.clients = clients
+	r.meta = clients
 }
 
-func (r *nodeV1Resource) Create(
+func (r *NodeResource) Create(
 	ctx context.Context,
 	req resource.CreateRequest,
 	resp *resource.CreateResponse,
 ) {
-	var plan nodeV1ResourceModel
+	var plan NodeResourceModel
 
 	// Get the plan
 	diags := req.Plan.Get(ctx, &plan)
@@ -662,18 +662,8 @@ func (r *nodeV1Resource) Create(
 		createOpts.AutomatedClean = &automated
 	}
 
-	// Get the ironic client
-	client, err := r.clients.GetIronicClient()
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Error getting Ironic client",
-			fmt.Sprintf("Could not get Ironic client: %s", err),
-		)
-		return
-	}
-
 	// Create the node
-	node, err := nodes.Create(ctx, client, createOpts).Extract()
+	node, err := nodes.Create(ctx, r.meta.Client, createOpts).Extract()
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error creating node",
@@ -706,12 +696,12 @@ func (r *nodeV1Resource) Create(
 	resp.Diagnostics.Append(diags...)
 }
 
-func (r *nodeV1Resource) Read(
+func (r *NodeResource) Read(
 	ctx context.Context,
 	req resource.ReadRequest,
 	resp *resource.ReadResponse,
 ) {
-	var state nodeV1ResourceModel
+	var state NodeResourceModel
 
 	// Get current state
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
@@ -761,13 +751,13 @@ func (r *nodeV1Resource) Read(
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 }
 
-func (r *nodeV1Resource) Update(
+func (r *NodeResource) Update(
 	ctx context.Context,
 	req resource.UpdateRequest,
 	resp *resource.UpdateResponse,
 ) {
-	var plan nodeV1ResourceModel
-	var state nodeV1ResourceModel
+	var plan NodeResourceModel
+	var state NodeResourceModel
 
 	// Get plan and current state
 	diags := req.Plan.Get(ctx, &plan)
@@ -831,18 +821,9 @@ func (r *nodeV1Resource) Update(
 	r.addBooleanUpdateOps(&updateOpts, &plan, &state)
 
 	if len(updateOpts) > 0 {
-		// Get the ironic client
-		client, err := r.clients.GetIronicClient()
-		if err != nil {
-			resp.Diagnostics.AddError(
-				"Error getting Ironic client",
-				fmt.Sprintf("Could not get Ironic client: %s", err),
-			)
-			return
-		}
 
 		// Perform the update
-		_, err = nodes.Update(ctx, client, state.ID.ValueString(), updateOpts).Extract()
+		_, err := nodes.Update(ctx, r.meta.Client, state.ID.ValueString(), updateOpts).Extract()
 		if err != nil {
 			resp.Diagnostics.AddError(
 				"Error updating node",
@@ -869,12 +850,12 @@ func (r *nodeV1Resource) Update(
 	resp.Diagnostics.Append(diags...)
 }
 
-func (r *nodeV1Resource) Delete(
+func (r *NodeResource) Delete(
 	ctx context.Context,
 	req resource.DeleteRequest,
 	resp *resource.DeleteResponse,
 ) {
-	var state nodeV1ResourceModel
+	var state NodeResourceModel
 
 	// Get current state
 	diags := req.State.Get(ctx, &state)
@@ -883,17 +864,7 @@ func (r *nodeV1Resource) Delete(
 		return
 	}
 
-	// Delete the node
-	client, err := r.clients.GetIronicClient()
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Error getting Ironic client",
-			fmt.Sprintf("Could not get Ironic client: %s", err),
-		)
-		return
-	}
-
-	err = nodes.Delete(ctx, client, state.ID.ValueString()).ExtractErr()
+	err := nodes.Delete(ctx, r.meta.Client, state.ID.ValueString()).ExtractErr()
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error deleting node",
@@ -903,7 +874,7 @@ func (r *nodeV1Resource) Delete(
 	}
 }
 
-func (r *nodeV1Resource) ImportState(
+func (r *NodeResource) ImportState(
 	ctx context.Context,
 	req resource.ImportStateRequest,
 	resp *resource.ImportStateResponse,
@@ -912,21 +883,12 @@ func (r *nodeV1Resource) ImportState(
 }
 
 // Helper function to read node data from the API and populate the model.
-func (r *nodeV1Resource) readNodeData(
+func (r *NodeResource) readNodeData(
 	ctx context.Context,
-	model *nodeV1ResourceModel,
+	model *NodeResourceModel,
 	diagnostics *diag.Diagnostics,
 ) {
-	client, err := r.clients.GetIronicClient()
-	if err != nil {
-		diagnostics.AddError(
-			"Error getting Ironic client",
-			fmt.Sprintf("Could not get Ironic client: %s", err),
-		)
-		return
-	}
-
-	node, err := nodes.Get(ctx, client, model.ID.ValueString()).Extract()
+	node, err := nodes.Get(ctx, r.meta.Client, model.ID.ValueString()).Extract()
 	if err != nil {
 		diagnostics.AddError(
 			"Error reading node",
@@ -1094,11 +1056,11 @@ func timeTypeOrNull(v time.Time) timetypes.RFC3339 {
 }
 
 // addDynamicUpdateOps handles changes for dynamic attributes.
-func (r *nodeV1Resource) addDynamicUpdateOps(
+func (r *NodeResource) addDynamicUpdateOps(
 	ctx context.Context,
 	updateOpts *nodes.UpdateOpts,
-	plan *nodeV1ResourceModel,
-	state *nodeV1ResourceModel,
+	plan *NodeResourceModel,
+	state *NodeResourceModel,
 	diagnostics *diag.Diagnostics,
 ) {
 	r.addDynamicUpdateOpsForField(
@@ -1136,7 +1098,7 @@ func (r *nodeV1Resource) addDynamicUpdateOps(
 }
 
 // addDynamicUpdateOpsForField handles changes for a single dynamic attribute.
-func (r *nodeV1Resource) addDynamicUpdateOpsForField(
+func (r *NodeResource) addDynamicUpdateOpsForField(
 	ctx context.Context,
 	updateOpts *nodes.UpdateOpts,
 	diagnostics *diag.Diagnostics,
@@ -1212,19 +1174,19 @@ func (r *nodeV1Resource) addDynamicUpdateOpsForField(
 }
 
 // addInterfaceUpdateOps handles changes for interface attributes.
-func (r *nodeV1Resource) addInterfaceUpdateOps(
+func (r *NodeResource) addInterfaceUpdateOps(
 	updateOpts *nodes.UpdateOpts,
-	plan *nodeV1ResourceModel,
-	state *nodeV1ResourceModel,
+	plan *NodeResourceModel,
+	state *NodeResourceModel,
 ) {
 	// TODO: Implement interface update logic
 }
 
 // addStringUpdateOps handles changes for string attributes.
-func (r *nodeV1Resource) addStringUpdateOps(
+func (r *NodeResource) addStringUpdateOps(
 	updateOpts *nodes.UpdateOpts,
-	plan *nodeV1ResourceModel,
-	state *nodeV1ResourceModel,
+	plan *NodeResourceModel,
+	state *NodeResourceModel,
 ) {
 	if !plan.BIOSInterface.Equal(state.BIOSInterface) {
 		*updateOpts = append(*updateOpts, nodes.UpdateOperation{
@@ -1243,34 +1205,24 @@ func (r *nodeV1Resource) addStringUpdateOps(
 }
 
 // addBooleanUpdateOps handles changes for boolean attributes.
-func (r *nodeV1Resource) addBooleanUpdateOps(
+func (r *NodeResource) addBooleanUpdateOps(
 	updateOpts *nodes.UpdateOpts,
-	plan *nodeV1ResourceModel,
-	state *nodeV1ResourceModel,
+	plan *NodeResourceModel,
+	state *NodeResourceModel,
 ) {
 	// TODO: Implement boolean update logic
 }
 
 // handleActionAttributes handles the action attributes (clean, inspect, available, manage).
 // These attributes trigger state changes but are not persisted in the API.
-func (r *nodeV1Resource) handleActionAttributes(
+func (r *NodeResource) handleActionAttributes(
 	ctx context.Context,
-	model *nodeV1ResourceModel,
+	model *NodeResourceModel,
 	diagnostics *diag.Diagnostics,
 ) {
 	nodeUUID := model.ID.ValueString()
 
-	// Get the ironic client
-	client, err := r.clients.GetIronicClient()
-	if err != nil {
-		diagnostics.AddError(
-			"Error getting Ironic client",
-			fmt.Sprintf("Could not get Ironic client: %s", err),
-		)
-		return
-	}
-
-	nodeInfo, err := nodes.Get(ctx, client, nodeUUID).Extract()
+	nodeInfo, err := nodes.Get(ctx, r.meta.Client, nodeUUID).Extract()
 	if err != nil {
 		diagnostics.AddError(
 			"Error getting node information",
@@ -1283,7 +1235,7 @@ func (r *nodeV1Resource) handleActionAttributes(
 	if !model.Clean.IsNull() && model.Clean.ValueBool() {
 		err := ChangeProvisionStateToTarget(
 			ctx,
-			client,
+			r.meta.Client,
 			nodeUUID,
 			nodes.TargetClean,
 			nil,
@@ -1307,7 +1259,7 @@ func (r *nodeV1Resource) handleActionAttributes(
 			if nodeInfo.ProvisionState == string(nodes.Manageable) {
 				err := ChangeProvisionStateToTarget(
 					ctx,
-					client,
+					r.meta.Client,
 					nodeUUID,
 					nodes.TargetInspect,
 					nil,
@@ -1332,7 +1284,7 @@ func (r *nodeV1Resource) handleActionAttributes(
 	if !model.Available.IsNull() && model.Available.ValueBool() {
 		err := ChangeProvisionStateToTarget(
 			ctx,
-			client,
+			r.meta.Client,
 			nodeUUID,
 			nodes.TargetProvide,
 			nil,
@@ -1354,7 +1306,7 @@ func (r *nodeV1Resource) handleActionAttributes(
 	if !model.Manage.IsNull() && model.Manage.ValueBool() {
 		err := ChangeProvisionStateToTarget(
 			ctx,
-			client,
+			r.meta.Client,
 			nodeUUID,
 			nodes.TargetManage,
 			nil,

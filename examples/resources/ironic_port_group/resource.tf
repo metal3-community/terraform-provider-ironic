@@ -1,4 +1,4 @@
-# Example usage of ironic_portgroup_v1 resource with the Framework implementation
+# Example usage of ironic_port_group resource with the Framework implementation
 
 terraform {
   required_providers {
@@ -16,22 +16,22 @@ provider "ironic" {
 }
 
 # Create a node first
-resource "ironic_node_v1" "test_node" {
+resource "ironic_node" "test_node" {
   name   = "test-node"
   driver = "fake-hardware"
 }
 
 # Basic portgroup configuration
-resource "ironic_portgroup_v1" "basic" {
+resource "ironic_port_group" "basic" {
   name      = "test-portgroup-basic"
-  node_uuid = ironic_node_v1.test_node.id
+  node_uuid = ironic_node.test_node.id
   mode      = "active-backup" # Default mode
 }
 
 # Portgroup with custom configuration
-resource "ironic_portgroup_v1" "advanced" {
+resource "ironic_port_group" "advanced" {
   name      = "test-portgroup-advanced"
-  node_uuid = ironic_node_v1.test_node.id
+  node_uuid = ironic_node.test_node.id
   mode      = "802.3ad"
   address   = "aa:bb:cc:dd:ee:ff"
 
@@ -46,13 +46,13 @@ resource "ironic_portgroup_v1" "advanced" {
 
 # Outputs to show the created resources
 output "basic_portgroup_id" {
-  value = ironic_portgroup_v1.basic.id
+  value = ironic_port_group.basic.id
 }
 
 output "advanced_portgroup_id" {
-  value = ironic_portgroup_v1.advanced.id
+  value = ironic_port_group.advanced.id
 }
 
 output "advanced_portgroup_extra" {
-  value = ironic_portgroup_v1.advanced.extra
+  value = ironic_port_group.advanced.extra
 }

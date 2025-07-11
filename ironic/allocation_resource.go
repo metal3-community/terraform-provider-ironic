@@ -34,7 +34,7 @@ var (
 
 // allocationV1Resource defines the resource implementation.
 type allocationV1Resource struct {
-	clients *Clients
+	meta *Meta
 }
 
 // allocationV1ResourceModel describes the resource data model.
@@ -60,7 +60,7 @@ func (r *allocationV1Resource) Metadata(
 	req resource.MetadataRequest,
 	resp *resource.MetadataResponse,
 ) {
-	resp.TypeName = req.ProviderTypeName + "_allocation_v1"
+	resp.TypeName = req.ProviderTypeName + "_allocation"
 }
 
 func (r *allocationV1Resource) Schema(
@@ -147,7 +147,7 @@ func (r *allocationV1Resource) Configure(
 		return
 	}
 
-	clients, ok := req.ProviderData.(*Clients)
+	clients, ok := req.ProviderData.(*Meta)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Configure Type",
@@ -159,7 +159,7 @@ func (r *allocationV1Resource) Configure(
 		return
 	}
 
-	r.clients = clients
+	r.meta = clients
 }
 
 func (r *allocationV1Resource) Create(
@@ -173,16 +173,6 @@ func (r *allocationV1Resource) Create(
 	diags := req.Plan.Get(ctx, &plan)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	// Get the ironic client
-	client, err := r.clients.GetIronicClient()
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Error getting Ironic client",
-			fmt.Sprintf("Could not get Ironic client: %s", err),
-		)
 		return
 	}
 
@@ -227,7 +217,13 @@ func (r *allocationV1Resource) Create(
 				)
 				return
 			}
-			res, err := client.Post(ctx, client.ServiceURL("allocations"), reqBody, &reqBody, nil)
+			res, err := r.meta.Client.Post(
+				ctx,
+				r.meta.Client.ServiceURL("allocations"),
+				reqBody,
+				&reqBody,
+				nil,
+			)
 			_, _, err = gophercloud.ParseResponse(res, err)
 			if err != nil {
 				resp.Diagnostics.AddError(
@@ -291,7 +287,7 @@ func (r *allocationV1Resource) Create(
 	}
 
 	// Create the allocation
-	allocation, err := allocations.Create(ctx, client, createOpts).Extract()
+	allocation, err := allocations.Create(ctx, r.meta.Client, createOpts).Extract()
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error creating allocation",
@@ -310,7 +306,7 @@ func (r *allocationV1Resource) Create(
 			fmt.Sprintf("Could not wait for allocation to complete: %s", err),
 		)
 		// Clean up the allocation if it failed
-		_ = allocations.Delete(ctx, client, allocation.UUID).ExtractErr()
+		_ = allocations.Delete(ctx, r.meta.Client, allocation.UUID).ExtractErr()
 		return
 	}
 
@@ -367,18 +363,8 @@ func (r *allocationV1Resource) Delete(
 		return
 	}
 
-	// Get the ironic client
-	client, err := r.clients.GetIronicClient()
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Error getting Ironic client",
-			fmt.Sprintf("Could not get Ironic client: %s", err),
-		)
-		return
-	}
-
 	// Check if allocation exists before trying to delete
-	_, err = allocations.Get(ctx, client, state.ID.ValueString()).Extract()
+	_, err := allocations.Get(ctx, r.meta.Client, state.ID.ValueString()).Extract()
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			// Already deleted
@@ -392,7 +378,7 @@ func (r *allocationV1Resource) Delete(
 	}
 
 	// Delete the allocation
-	err = allocations.Delete(ctx, client, state.ID.ValueString()).ExtractErr()
+	err = allocations.Delete(ctx, r.meta.Client, state.ID.ValueString()).ExtractErr()
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error deleting allocation",
@@ -458,16 +444,7 @@ func (r *allocationV1Resource) readAllocationData(
 	model *allocationV1ResourceModel,
 	diagnostics *diag.Diagnostics,
 ) {
-	client, err := r.clients.GetIronicClient()
-	if err != nil {
-		diagnostics.AddError(
-			"Error getting Ironic client",
-			fmt.Sprintf("Could not get Ironic client: %s", err),
-		)
-		return
-	}
-
-	allocation, err := allocations.Get(ctx, client, model.ID.ValueString()).Extract()
+	allocation, err := allocations.Get(ctx, r.meta.Client, model.ID.ValueString()).Extract()
 	if err != nil {
 		diagnostics.AddError(
 			"Error reading allocation",

@@ -35,14 +35,14 @@ func TestAccIntrospectionFramework(t *testing.T) {
 
 func testAccIntrospectionFrameworkConfig(nodeName string) string {
 	return fmt.Sprintf(`
-resource "ironic_node_v1" "test-node" {
+resource "ironic_node" "test-node" {
   name           = "%s"
   driver         = "fake-hardware"
   target_provision_state = "manageable"
 }
 
 data "ironic_introspection" "test-data" {
-  uuid = ironic_node_v1.test-node.id
+  uuid = ironic_node.test-node.id
 }
 `, nodeName)
 }

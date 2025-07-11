@@ -19,18 +19,18 @@ import (
 
 // Ensure the implementation satisfies the expected interfaces.
 var (
-	_ resource.Resource                = &portV1Resource{}
-	_ resource.ResourceWithConfigure   = &portV1Resource{}
-	_ resource.ResourceWithImportState = &portV1Resource{}
+	_ resource.Resource                = &NewPortResource{}
+	_ resource.ResourceWithConfigure   = &NewPortResource{}
+	_ resource.ResourceWithImportState = &NewPortResource{}
 )
 
-// portV1Resource defines the resource implementation.
-type portV1Resource struct {
-	clients *Clients
+// NewPortResource defines the resource implementation.
+type NewPortResource struct {
+	meta *Meta
 }
 
-// portV1ResourceModel describes the resource data model.
-type portV1ResourceModel struct {
+// PortResourceModel describes the resource data model.
+type PortResourceModel struct {
 	ID                  types.String  `tfsdk:"id"`
 	NodeUUID            types.String  `tfsdk:"node_uuid"`
 	Address             types.String  `tfsdk:"address"`
@@ -43,18 +43,18 @@ type portV1ResourceModel struct {
 }
 
 func NewPortV1Resource() resource.Resource {
-	return &portV1Resource{}
+	return &NewPortResource{}
 }
 
-func (r *portV1Resource) Metadata(
+func (r *NewPortResource) Metadata(
 	ctx context.Context,
 	req resource.MetadataRequest,
 	resp *resource.MetadataResponse,
 ) {
-	resp.TypeName = req.ProviderTypeName + "_port_v1"
+	resp.TypeName = req.ProviderTypeName + "_port"
 }
 
-func (r *portV1Resource) Schema(
+func (r *NewPortResource) Schema(
 	ctx context.Context,
 	req resource.SchemaRequest,
 	resp *resource.SchemaResponse,
@@ -133,7 +133,7 @@ func (r *portV1Resource) Schema(
 	}
 }
 
-func (r *portV1Resource) Configure(
+func (r *NewPortResource) Configure(
 	ctx context.Context,
 	req resource.ConfigureRequest,
 	resp *resource.ConfigureResponse,
@@ -142,7 +142,7 @@ func (r *portV1Resource) Configure(
 		return
 	}
 
-	clients, ok := req.ProviderData.(*Clients)
+	clients, ok := req.ProviderData.(*Meta)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Configure Type",
@@ -154,30 +154,20 @@ func (r *portV1Resource) Configure(
 		return
 	}
 
-	r.clients = clients
+	r.meta = clients
 }
 
-func (r *portV1Resource) Create(
+func (r *NewPortResource) Create(
 	ctx context.Context,
 	req resource.CreateRequest,
 	resp *resource.CreateResponse,
 ) {
-	var plan portV1ResourceModel
+	var plan PortResourceModel
 
 	// Get the plan
 	diags := req.Plan.Get(ctx, &plan)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	// Get the ironic client
-	client, err := r.clients.GetIronicClient()
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Error getting Ironic client",
-			fmt.Sprintf("Could not get Ironic client: %s", err),
-		)
 		return
 	}
 
@@ -240,7 +230,7 @@ func (r *portV1Resource) Create(
 	}
 
 	// Create the port
-	port, err := ports.Create(ctx, client, createOpts).Extract()
+	port, err := ports.Create(ctx, r.meta.Client, createOpts).Extract()
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error creating port",
@@ -263,12 +253,12 @@ func (r *portV1Resource) Create(
 	resp.Diagnostics.Append(diags...)
 }
 
-func (r *portV1Resource) Read(
+func (r *NewPortResource) Read(
 	ctx context.Context,
 	req resource.ReadRequest,
 	resp *resource.ReadResponse,
 ) {
-	var state portV1ResourceModel
+	var state PortResourceModel
 
 	// Get current state
 	diags := req.State.Get(ctx, &state)
@@ -288,13 +278,13 @@ func (r *portV1Resource) Read(
 	resp.Diagnostics.Append(diags...)
 }
 
-func (r *portV1Resource) Update(
+func (r *NewPortResource) Update(
 	ctx context.Context,
 	req resource.UpdateRequest,
 	resp *resource.UpdateResponse,
 ) {
-	var plan portV1ResourceModel
-	var state portV1ResourceModel
+	var plan PortResourceModel
+	var state PortResourceModel
 
 	// Get plan and current state
 	diags := req.Plan.Get(ctx, &plan)
@@ -306,16 +296,6 @@ func (r *portV1Resource) Update(
 	diags = req.State.Get(ctx, &state)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	// Get the ironic client
-	client, err := r.clients.GetIronicClient()
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Error getting Ironic client",
-			fmt.Sprintf("Could not get Ironic client: %s", err),
-		)
 		return
 	}
 
@@ -399,7 +379,7 @@ func (r *portV1Resource) Update(
 
 	// Perform the update if there are changes
 	if len(updateOpts) > 0 {
-		_, err = ports.Update(ctx, client, state.ID.ValueString(), updateOpts).Extract()
+		_, err := ports.Update(ctx, r.meta.Client, state.ID.ValueString(), updateOpts).Extract()
 		if err != nil {
 			resp.Diagnostics.AddError(
 				"Error updating port",
@@ -420,12 +400,12 @@ func (r *portV1Resource) Update(
 	resp.Diagnostics.Append(diags...)
 }
 
-func (r *portV1Resource) Delete(
+func (r *NewPortResource) Delete(
 	ctx context.Context,
 	req resource.DeleteRequest,
 	resp *resource.DeleteResponse,
 ) {
-	var state portV1ResourceModel
+	var state PortResourceModel
 
 	// Get current state
 	diags := req.State.Get(ctx, &state)
@@ -434,18 +414,8 @@ func (r *portV1Resource) Delete(
 		return
 	}
 
-	// Get the ironic client
-	client, err := r.clients.GetIronicClient()
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Error getting Ironic client",
-			fmt.Sprintf("Could not get Ironic client: %s", err),
-		)
-		return
-	}
-
 	// Delete the port
-	err = ports.Delete(ctx, client, state.ID.ValueString()).ExtractErr()
+	err := ports.Delete(ctx, r.meta.Client, state.ID.ValueString()).ExtractErr()
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error deleting port",
@@ -455,7 +425,7 @@ func (r *portV1Resource) Delete(
 	}
 }
 
-func (r *portV1Resource) ImportState(
+func (r *NewPortResource) ImportState(
 	ctx context.Context,
 	req resource.ImportStateRequest,
 	resp *resource.ImportStateResponse,
@@ -464,7 +434,7 @@ func (r *portV1Resource) ImportState(
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 
 	// Read the port data
-	var state portV1ResourceModel
+	var state PortResourceModel
 	state.ID = types.StringValue(req.ID)
 
 	r.readPortData(ctx, &state, &resp.Diagnostics)
@@ -478,21 +448,12 @@ func (r *portV1Resource) ImportState(
 }
 
 // Helper function to read port data from the API and populate the model.
-func (r *portV1Resource) readPortData(
+func (r *NewPortResource) readPortData(
 	ctx context.Context,
-	model *portV1ResourceModel,
+	model *PortResourceModel,
 	diagnostics *diag.Diagnostics,
 ) {
-	client, err := r.clients.GetIronicClient()
-	if err != nil {
-		diagnostics.AddError(
-			"Error getting Ironic client",
-			fmt.Sprintf("Could not get Ironic client: %s", err),
-		)
-		return
-	}
-
-	port, err := ports.Get(ctx, client, model.ID.ValueString()).Extract()
+	port, err := ports.Get(ctx, r.meta.Client, model.ID.ValueString()).Extract()
 	if err != nil {
 		diagnostics.AddError(
 			"Error reading port",

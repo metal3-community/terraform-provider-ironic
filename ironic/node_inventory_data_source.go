@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/appkins-org/terraform-provider-ironic/ironic/models"
 	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/v1/nodes"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
+	"github.com/metal3-community/terraform-provider-ironic/ironic/models"
 )
 
 // Ensure the implementation satisfies the expected interfaces.

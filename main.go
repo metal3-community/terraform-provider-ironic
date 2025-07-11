@@ -5,8 +5,8 @@ import (
 	"flag"
 	"log"
 
-	provider "github.com/appkins-org/terraform-provider-ironic/ironic"
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
+	"github.com/metal3-community/terraform-provider-ironic/ironic"
 )
 
 //go:generate go tool github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs generate -provider-name ironic
@@ -22,11 +22,11 @@ func main() {
 	flag.Parse()
 
 	opts := providerserver.ServeOpts{
-		Address: "registry.terraform.io/appkins-org/ironic",
+		Address: "registry.terraform.io/metal3-community/ironic",
 		Debug:   debug,
 	}
 
-	err := providerserver.Serve(context.Background(), provider.New(), opts)
+	err := providerserver.Serve(context.Background(), ironic.New(), opts)
 	if err != nil {
 		log.Fatal(err.Error())
 	}

@@ -520,7 +520,7 @@ if apiResponse.LastError == "" {
 
 ## Resources for Reference
 
-- [Ironic Provider Example](https://github.com/appkins-org/terraform-provider-ironic) - Complete migration example
+- [Ironic Provider Example](https://github.com/metal3-community/terraform-provider-ironic) - Complete migration example
 - [Framework Migration Guide](https://developer.hashicorp.com/terraform/plugin/framework/migrating)
 - [Muxing Documentation](https://developer.hashicorp.com/terraform/plugin/mux)
 - [Framework Testing](https://developer.hashicorp.com/terraform/plugin/framework/testing)

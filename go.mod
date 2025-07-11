@@ -1,4 +1,4 @@
-module github.com/appkins-org/terraform-provider-ironic
+module github.com/metal3-community/terraform-provider-ironic
 
 go 1.24
 

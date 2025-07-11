@@ -8,12 +8,12 @@ import (
 	"fmt"
 	"testing"
 
-	th "github.com/appkins-org/terraform-provider-ironic/testhelper"
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/v1/nodes"
 	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/v1/ports"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
+	th "github.com/metal3-community/terraform-provider-ironic/testhelper"
 )
 
 func TestAccIronicPortV1_basic(t *testing.T) {

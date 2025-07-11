@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/appkins-org/terraform-provider-ironic/ironic/util"
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/v1/nodes"
 	utilgc "github.com/gophercloud/utils/openstack/baremetal/v1/nodes"
@@ -28,6 +27,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
+	"github.com/metal3-community/terraform-provider-ironic/ironic/util"
 )
 
 // Ensure the implementation satisfies the expected interfaces.

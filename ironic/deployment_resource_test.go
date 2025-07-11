@@ -13,12 +13,12 @@ import (
 	"reflect"
 	"testing"
 
-	th "github.com/appkins-org/terraform-provider-ironic/testhelper"
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/v1/nodes"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
+	th "github.com/metal3-community/terraform-provider-ironic/testhelper"
 )
 
 // Creates a node, and an allocation that should use it

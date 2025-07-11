@@ -18,7 +18,7 @@ Manages an Ironic port group resource.
 terraform {
   required_providers {
     ironic = {
-      source  = "appkins-org/ironic"
+      source  = "metal3-community/ironic"
       version = "~> 0.5.0" # Framework version
     }
   }

@@ -6,7 +6,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/appkins-org/terraform-provider-ironic/ironic/util/retry"
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/httpbasic"
 	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/noauth"
@@ -18,6 +17,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
+	"github.com/metal3-community/terraform-provider-ironic/ironic/util/retry"
 )
 
 // Meta stores the client connection information for Ironic.

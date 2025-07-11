@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/appkins-org/terraform-provider-ironic/ironic/util"
 	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/v1/portgroups"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -15,6 +14,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/metal3-community/terraform-provider-ironic/ironic/util"
 )
 
 // Ensure the implementation satisfies the expected interfaces.

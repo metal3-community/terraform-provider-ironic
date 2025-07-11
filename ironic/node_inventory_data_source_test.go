@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"testing"
 
-	th "github.com/appkins-org/terraform-provider-ironic/testhelper"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	th "github.com/metal3-community/terraform-provider-ironic/testhelper"
 )
 
 // TestAccIntrospectionFramework creates a node resource and verifies the framework-based introspection data source

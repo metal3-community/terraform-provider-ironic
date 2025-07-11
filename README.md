@@ -173,6 +173,50 @@ To run the acceptance tests locally, it's necessary to have a local instance of
 ironic and ironic-inspector running.  A similar configuration to that used in
 CI can be achieved by running `hack/local_ironic.sh`
 
+## Dealing with the Ironic State Machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> enroll
+
+    enroll --> manageable : manage
+    manageable --> enroll : unmanage
+
+    manageable --> inspecting : inspect
+    inspecting --> inspect failed : fail
+    inspecting --> manageable : success
+
+    manageable --> cleaning : clean
+    cleaning --> clean failed : fail
+    cleaning --> available : success
+    cleaning --> manageable : abort
+
+    available --> active : deploy
+    active --> deploying : rebuild or re-provision
+    active --> deleting : undeploy
+
+    deploying --> deploy failed : fail
+    deploying --> active : success
+
+    deleting --> available : success
+    deleting --> delete failed : fail
+
+    active --> rescuing : rescue
+    rescuing --> rescue failed : fail
+    rescuing --> rescued : success
+    rescued --> unrescuing : unrescue
+    unrescuing --> rescue failed : fail
+    unrescuing --> active : success
+
+    manageable --> adopting : adopt
+    adopting --> adopt failed : fail
+    adopting --> manageable : success
+
+    cleaning --> cleaning : clean again
+    cleaning --> cleaning failed : fail
+    cleaning --> available : finished
+```
+
 # License
 
 Apache 2.0, See LICENSE file

@@ -3,391 +3,257 @@ package ironic
 import (
 	"context"
 	"fmt"
-	"log"
-	"net/http"
-	"strings"
-	"sync"
-	"time"
+	"os"
 
-	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/httpbasic"
 	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/noauth"
-	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/v1/drivers"
-	httpbasicintrospection "github.com/gophercloud/gophercloud/v2/openstack/baremetalintrospection/httpbasic"
-	noauthintrospection "github.com/gophercloud/gophercloud/v2/openstack/baremetalintrospection/noauth"
-	"github.com/gophercloud/gophercloud/v2/pagination"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
+	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
+	"github.com/hashicorp/terraform-plugin-framework/provider"
+	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
-// Clients stores the client connection information for Ironic and Inspector.
-type Clients struct {
-	ironic    *gophercloud.ServiceClient
-	inspector *gophercloud.ServiceClient
-
-	// Boolean that determines if Ironic API was previously determined to be available, we don't need to try every time.
-	ironicUp bool
-
-	// Boolean that determines we've already waited and the API never came up, we don't need to wait again.
-	ironicFailed bool
-
-	// Mutex so that only one resource being created by terraform checks at a time. There's no reason to have multiple
-	// resources calling out to the API.
-	ironicMux sync.Mutex
-
-	// Boolean that determines if Inspector API was previously determined to be available, we don't need to try every time.
-	inspectorUp bool
-
-	// Boolean that determines that we've already waited, and inspector API did not come up.
-	inspectorFailed bool
-
-	// Mutex so that only one resource being created by terraform checks at a time. There's no reason to have multiple
-	// resources calling out to the API.
-	inspectorMux sync.Mutex
-
-	timeout int
+// Shared descriptions for provider attributes to ensure consistency.
+var frameworkDescriptions = map[string]string{
+	"url":                "The authentication endpoint for Ironic",
+	"inspector":          "The endpoint for Ironic inspector",
+	"microversion":       "The microversion to use for Ironic",
+	"timeout":            "Wait at least the specified number of seconds for the API to become available",
+	"auth_strategy":      "Determine the strategy to use for authentication with Ironic services, Possible values: noauth, http_basic. Defaults to noauth.",
+	"ironic_username":    "Username to be used by Ironic when using `http_basic` authentication",
+	"ironic_password":    "Password to be used by Ironic when using `http_basic` authentication",
+	"inspector_username": "Username to be used by Ironic Inspector when using `http_basic` authentication",
+	"inspector_password": "Password to be used by Ironic Inspector when using `http_basic` authentication",
 }
 
-// GetIronicClient returns the API client for Ironic, optionally retrying to reach the API if timeout is set.
-func (c *Clients) GetIronicClient() (*gophercloud.ServiceClient, error) {
-	// Terraform concurrently creates some resources which means multiple callers can request an Ironic client. We
-	// only need to check if the API is available once, so we use a mux to restrict one caller to polling the API.
-	// When the mux is released, the other callers will fall through to the check for ironicUp.
-	c.ironicMux.Lock()
-	defer c.ironicMux.Unlock()
+// ironicProvider is a type that implements the terraform-plugin-framework
+// provider.Provider interface. Someday, this will probably encompass the entire
+// behavior of the ironic provider. Today, it is a small but growing subset.
+type ironicProvider struct{}
 
-	// Ironic is UP, or user didn't ask us to check
-	if c.ironicUp || c.timeout == 0 {
-		return c.ironic, nil
-	}
+var (
+	_ provider.Provider                       = &ironicProvider{}
+	_ provider.ProviderWithEphemeralResources = &ironicProvider{}
+)
 
-	// We previously tried and it failed.
-	if c.ironicFailed {
-		return nil, fmt.Errorf("could not contact Ironic API: timeout reached")
-	}
-
-	// Let's poll the API until it's up, or times out.
-	duration := time.Duration(c.timeout) * time.Second
-	ctx, cancel := context.WithTimeout(context.Background(), duration)
-	defer cancel()
-
-	done := make(chan struct{})
-	go func() {
-		log.Printf("[INFO] Waiting for Ironic API...")
-		waitForAPI(ctx, c.ironic)
-		log.Printf("[INFO] API successfully connected, waiting for conductor...")
-		waitForConductor(ctx, c.ironic)
-		close(done)
-	}()
-
-	// Wait for done or time out
-	select {
-	case <-ctx.Done():
-		if err := ctx.Err(); err != nil {
-			c.ironicFailed = true
-			return nil, fmt.Errorf("could not contact Ironic API: %w", err)
-		}
-	case <-done:
-	}
-
-	c.ironicUp = true
-	return c.ironic, ctx.Err()
+// FrameworkProviderConfig is a helper type for extracting the provider
+// configuration from the provider block.
+type FrameworkProviderConfig struct {
+	Url               types.String `tfsdk:"url"`
+	Inspector         types.String `tfsdk:"inspector"`
+	Microversion      types.String `tfsdk:"microversion"`
+	Timeout           types.Int64  `tfsdk:"timeout"`
+	AuthStrategy      types.String `tfsdk:"auth_strategy"`
+	IronicUsername    types.String `tfsdk:"ironic_username"`
+	IronicPassword    types.String `tfsdk:"ironic_password"`
+	InspectorUsername types.String `tfsdk:"inspector_username"`
+	InspectorPassword types.String `tfsdk:"inspector_password"`
 }
 
-// GetInspectorClient returns the API client for Ironic, optionally retrying to reach the API if timeout is set.
-func (c *Clients) GetInspectorClient() (*gophercloud.ServiceClient, error) {
-	// Terraform concurrently creates some resources which means multiple callers can request an Inspector client. We
-	// only need to check if the API is available once, so we use a mux to restrict one caller to polling the API.
-	// When the mux is released, the other callers will fall through to the check for inspectorUp.
-	c.inspectorMux.Lock()
-	defer c.inspectorMux.Unlock()
-
-	if c.inspector == nil {
-		return nil, fmt.Errorf("no inspector endpoint was specified")
-	} else if c.inspectorUp || c.timeout == 0 {
-		return c.inspector, nil
-	} else if c.inspectorFailed {
-		return nil, fmt.Errorf("could not contact Inspector API: timeout reached")
+// New is a helper function for initializing the portion of
+// the ironic provider implemented via the terraform-plugin-framework.
+func New() func() provider.Provider {
+	return func() provider.Provider {
+		return &ironicProvider{}
 	}
-
-	// Let's poll the API until it's up, or times out.
-	duration := time.Duration(c.timeout) * time.Second
-	ctx, cancel := context.WithTimeout(context.Background(), duration)
-	defer cancel()
-
-	done := make(chan struct{})
-	go func() {
-		log.Printf("[INFO] Waiting for Inspector API...")
-		waitForAPI(ctx, c.inspector)
-		close(done)
-	}()
-
-	// Wait for done or time out
-	select {
-	case <-ctx.Done():
-		if err := ctx.Err(); err != nil {
-			c.ironicFailed = true
-			return nil, err
-		}
-	case <-done:
-	}
-
-	if err := ctx.Err(); err != nil {
-		c.inspectorFailed = true
-		return nil, err
-	}
-
-	c.inspectorUp = true
-	return c.inspector, ctx.Err()
 }
 
-func GetIronicClient(ctx context.Context, meta any) (*gophercloud.ServiceClient, error) {
-	client, ok := meta.(*Clients)
-	if !ok {
-		return nil, fmt.Errorf("expected meta to be of type *Clients, got %T", meta)
-	}
-
-	ironicClient, err := client.GetIronicClient()
-	if err != nil {
-		return nil, fmt.Errorf("could not get Ironic client: %w", err)
-	}
-
-	// Ensure the API is available before returning the client.
-	waitForAPI(ctx, ironicClient)
-
-	return ironicClient, nil
+// Metadata (a Provider interface function) lets the provider identify itself.
+// Resources and data sources can access this information from their request
+// objects.
+func (p *ironicProvider) Metadata(
+	_ context.Context,
+	_ provider.MetadataRequest,
+	res *provider.MetadataResponse,
+) {
+	res.TypeName = "ironic"
 }
 
-// Provider Ironic.
-func Provider() *schema.Provider {
-	return &schema.Provider{
-		Schema: map[string]*schema.Schema{
-			"url": {
-				Type:        schema.TypeString,
+// Schema (a Provider interface function) returns the schema for the Terraform
+// block that configures the provider itself.
+func (p *ironicProvider) Schema(
+	_ context.Context,
+	_ provider.SchemaRequest,
+	res *provider.SchemaResponse,
+) {
+	res.Schema = schema.Schema{
+		Attributes: map[string]schema.Attribute{
+			"url": schema.StringAttribute{
 				Required:    true,
-				DefaultFunc: schema.EnvDefaultFunc("IRONIC_ENDPOINT", ""),
-				Description: descriptions["url"],
+				Description: frameworkDescriptions["url"],
 			},
-			"inspector": {
-				Type:        schema.TypeString,
+			"inspector": schema.StringAttribute{
 				Optional:    true,
-				DefaultFunc: schema.EnvDefaultFunc("IRONIC_INSPECTOR_ENDPOINT", ""),
-				Description: descriptions["inspector"],
+				Description: frameworkDescriptions["inspector"],
 			},
-			"microversion": {
-				Type:        schema.TypeString,
+			"microversion": schema.StringAttribute{
 				Required:    true,
-				DefaultFunc: schema.EnvDefaultFunc("IRONIC_MICROVERSION", "1.52"),
-				Description: descriptions["microversion"],
+				Description: frameworkDescriptions["microversion"],
 			},
-			"timeout": {
-				Type:        schema.TypeInt,
+			"timeout": schema.Int64Attribute{
 				Optional:    true,
-				Description: descriptions["timeout"],
-				Default:     0,
+				Description: frameworkDescriptions["timeout"],
 			},
-			"auth_strategy": {
-				Type:        schema.TypeString,
+			"auth_strategy": schema.StringAttribute{
 				Optional:    true,
-				DefaultFunc: schema.EnvDefaultFunc("IRONIC_AUTH_STRATEGY", "noauth"),
-				Description: descriptions["auth_strategy"],
-				ValidateFunc: validation.StringInSlice([]string{
-					"noauth", "http_basic",
-				}, false),
+				Description: frameworkDescriptions["auth_strategy"],
 			},
-			"ironic_username": {
-				Type:        schema.TypeString,
+			"ironic_username": schema.StringAttribute{
 				Optional:    true,
-				DefaultFunc: schema.EnvDefaultFunc("IRONIC_HTTP_BASIC_USERNAME", ""),
-				Description: descriptions["ironic_username"],
+				Description: frameworkDescriptions["ironic_username"],
 			},
-			"ironic_password": {
-				Type:        schema.TypeString,
+			"ironic_password": schema.StringAttribute{
 				Optional:    true,
 				Sensitive:   true,
-				DefaultFunc: schema.EnvDefaultFunc("IRONIC_HTTP_BASIC_PASSWORD", ""),
-				Description: descriptions["ironic_password"],
+				Description: frameworkDescriptions["ironic_password"],
 			},
-			"inspector_username": {
-				Type:        schema.TypeString,
+			"inspector_username": schema.StringAttribute{
 				Optional:    true,
-				DefaultFunc: schema.EnvDefaultFunc("INSPECTOR_HTTP_BASIC_USERNAME", ""),
-				Description: descriptions["inspector_username"],
+				Description: frameworkDescriptions["inspector_username"],
 			},
-			"inspector_password": {
-				Type:        schema.TypeString,
+			"inspector_password": schema.StringAttribute{
 				Optional:    true,
 				Sensitive:   true,
-				DefaultFunc: schema.EnvDefaultFunc("INSPECTOR_HTTP_BASIC_PASSWORD", ""),
-				Description: descriptions["inspector_username"],
+				Description: frameworkDescriptions["inspector_password"],
 			},
 		},
-		ResourcesMap: map[string]*schema.Resource{
-			"ironic_node_v1":       resourceNodeV1(),
-			"ironic_port_v1":       resourcePortV1(),
-			"ironic_portgroup_v1":  resourcePortGroupV1(),
-			"ironic_allocation_v1": resourceAllocationV1(),
-			"ironic_deployment":    resourceDeployment(),
-		},
-		DataSourcesMap: map[string]*schema.Resource{
-			"ironic_introspection": dataSourceIronicIntrospection(),
-		},
-		ConfigureFunc: configureProvider,
 	}
 }
 
-var descriptions map[string]string
-
-func init() {
-	descriptions = map[string]string{
-		"url":                "The authentication endpoint for Ironic",
-		"inspector":          "The endpoint for Ironic inspector",
-		"microversion":       "The microversion to use for Ironic",
-		"timeout":            "Wait at least the specified number of seconds for the API to become available",
-		"auth_strategy":      "Determine the strategy to use for authentication with Ironic services, Possible values: noauth, http_basic. Defaults to noauth.",
-		"ironic_username":    "Username to be used by Ironic when using `http_basic` authentication",
-		"ironic_password":    "Password to be used by Ironic when using `http_basic` authentication",
-		"inspector_username": "Username to be used by Ironic Inspector when using `http_basic` authentication",
-		"inspector_password": "Password to be used by Ironic Inspector when using `http_basic` authentication",
-	}
-}
-
-// Creates a noauth Ironic client.
-func configureProvider(schema *schema.ResourceData) (any, error) {
+// Configure (a Provider interface function) sets up the Ironic client per the
+// specified provider configuration block and env vars.
+func (p *ironicProvider) Configure(
+	ctx context.Context,
+	req provider.ConfigureRequest,
+	res *provider.ConfigureResponse,
+) {
 	var clients Clients
+	var data FrameworkProviderConfig
+	diags := req.Config.Get(ctx, &data)
 
-	url := schema.Get("url").(string)
-	if url == "" {
-		return nil, fmt.Errorf("url is required for ironic provider")
+	res.Diagnostics.Append(diags...)
+	if res.Diagnostics.HasError() {
+		return
 	}
-	log.Printf("[DEBUG] Ironic endpoint is %s", url)
 
-	authStrategy := schema.Get("auth_strategy").(string)
+	tflog.Info(ctx, "Configuring Ironic provider")
+
+	// Get URL with environment variable fallback
+	url := data.Url.ValueString()
+	if url == "" {
+		if v := os.Getenv("IRONIC_ENDPOINT"); v != "" {
+			url = v
+		}
+	}
+	if url == "" {
+		res.Diagnostics.AddError(
+			"Missing Ironic URL",
+			"The 'url' field is required for the Ironic provider.",
+		)
+		return
+	}
+	tflog.Debug(ctx, "Setting up ironic endpoint", map[string]any{"url": url})
+
+	// Get microversion with environment variable fallback and default
+	microversion := data.Microversion.ValueString()
+	if microversion == "" {
+		if v := os.Getenv("IRONIC_MICROVERSION"); v != "" {
+			microversion = v
+		} else {
+			microversion = "1.99"
+		}
+	}
+
+	// Get auth strategy with environment variable fallback and default
+	authStrategy := data.AuthStrategy.ValueString()
+	if authStrategy == "" {
+		if v := os.Getenv("IRONIC_AUTH_STRATEGY"); v != "" {
+			authStrategy = v
+		} else {
+			authStrategy = "noauth"
+		}
+	}
 
 	if authStrategy == "http_basic" {
-		log.Printf("[DEBUG] Using http_basic auth_strategy")
+		tflog.Debug(ctx, "Using http_basic auth_strategy")
 
-		ironicUser := schema.Get("ironic_username").(string)
-		ironicPassword := schema.Get("ironic_password").(string)
+		// Get Ironic credentials with environment variable fallback
+		ironicUser := data.IronicUsername.ValueString()
+		if ironicUser == "" {
+			if v := os.Getenv("IRONIC_HTTP_BASIC_USERNAME"); v != "" {
+				ironicUser = v
+			}
+		}
+
+		ironicPassword := data.IronicPassword.ValueString()
+		if ironicPassword == "" {
+			if v := os.Getenv("IRONIC_HTTP_BASIC_PASSWORD"); v != "" {
+				ironicPassword = v
+			}
+		}
+
 		ironic, err := httpbasic.NewBareMetalHTTPBasic(httpbasic.EndpointOpts{
 			IronicEndpoint:     url,
 			IronicUser:         ironicUser,
 			IronicUserPassword: ironicPassword,
 		})
 		if err != nil {
-			return nil, err
+			res.Diagnostics.AddError(
+				"Could not configure Ironic endpoint",
+				fmt.Sprintf("Error: %s", err.Error()),
+			)
+			return
 		}
 
-		ironic.Microversion = schema.Get("microversion").(string)
+		ironic.Microversion = microversion
 		clients.ironic = ironic
 
-		inspectorURL := schema.Get("inspector").(string)
-		if inspectorURL != "" {
-			inspectorUser := schema.Get("inspector_username").(string)
-			inspectorPassword := schema.Get("inspector_password").(string)
-			log.Printf("[DEBUG] Inspector endpoint is %s", inspectorURL)
-
-			inspector, err := httpbasicintrospection.NewBareMetalIntrospectionHTTPBasic(
-				httpbasicintrospection.EndpointOpts{
-					IronicInspectorEndpoint:     inspectorURL,
-					IronicInspectorUser:         inspectorUser,
-					IronicInspectorUserPassword: inspectorPassword,
-				},
-			)
-			if err != nil {
-				return nil, err
-			}
-			clients.inspector = inspector
-		}
-
 	} else {
-		log.Printf("[DEBUG] Using noauth auth_strategy")
+		tflog.Debug(ctx, "Using noauth auth_strategy")
 		ironic, err := noauth.NewBareMetalNoAuth(noauth.EndpointOpts{
 			IronicEndpoint: url,
 		})
 		if err != nil {
-			return nil, err
+			res.Diagnostics.AddError(
+				"Could not configure Ironic endpoint",
+				fmt.Sprintf("Error: %s", err.Error()),
+			)
+			return
 		}
-		ironic.Microversion = schema.Get("microversion").(string)
+		ironic.Microversion = microversion
 		clients.ironic = ironic
-
-		inspectorURL := schema.Get("inspector").(string)
-		if inspectorURL != "" {
-			log.Printf("[DEBUG] Inspector endpoint is %s", inspectorURL)
-			inspector, err := noauthintrospection.NewBareMetalIntrospectionNoAuth(noauthintrospection.EndpointOpts{
-				IronicInspectorEndpoint: inspectorURL,
-			})
-			if err != nil {
-				return nil, fmt.Errorf("could not configure inspector endpoint: %s", err.Error())
-			}
-			clients.inspector = inspector
-		}
-
 	}
 
-	clients.timeout = schema.Get("timeout").(int)
+	// Set timeout with default value of 0
+	timeout := int(data.Timeout.ValueInt64())
+	clients.timeout = timeout
 
-	return &clients, nil
+	res.DataSourceData = &clients
+	res.ResourceData = &clients
+	res.EphemeralResourceData = &clients
 }
 
-// Retries an API forever until it responds.
-func waitForAPI(ctx context.Context, client *gophercloud.ServiceClient) {
-	httpClient := &http.Client{
-		Timeout: 5 * time.Second,
-	}
-
-	// NOTE: Some versions of Ironic inspector returns 404 for /v1/ but 200 for /v1,
-	// which seems to be the default behavior for Flask. Remove the trailing slash
-	// from the client endpoint.
-	endpoint := strings.TrimSuffix(client.Endpoint, "/")
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			log.Printf("[DEBUG] Waiting for API to become available...")
-
-			r, err := httpClient.Get(endpoint)
-			if err == nil {
-				statusCode := r.StatusCode
-				r.Body.Close()
-				if statusCode == http.StatusOK {
-					return
-				}
-			}
-
-			time.Sleep(5 * time.Second)
-		}
+func (p *ironicProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
+	return []func() datasource.DataSource{
+		NewNodeInventoryDataSource,
 	}
 }
 
-// Ironic conductor can be considered up when the driver count returns non-zero.
-func waitForConductor(ctx context.Context, client *gophercloud.ServiceClient) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			log.Printf("[DEBUG] Waiting for conductor API to become available...")
-			driverCount := 0
-
-			err := drivers.ListDrivers(client, drivers.ListDriversOpts{
-				Detail: false,
-			}).EachPage(context.Background(), func(ctx context.Context, page pagination.Page) (bool, error) {
-				actual, err := drivers.ExtractDrivers(page)
-				if err != nil {
-					return false, err
-				}
-				driverCount += len(actual)
-				return true, nil
-			})
-			// If we have any drivers, conductor is up.
-			if err == nil && driverCount > 0 {
-				return
-			}
-
-			time.Sleep(5 * time.Second)
-		}
+func (p *ironicProvider) Resources(ctx context.Context) []func() resource.Resource {
+	return []func() resource.Resource{
+		NewNodeV1Resource,
+		NewPortGroupV1Resource,
+		NewPortV1Resource,
+		NewAllocationV1Resource,
+		NewDeploymentResource,
 	}
+}
+
+func (p *ironicProvider) EphemeralResources(
+	ctx context.Context,
+) []func() ephemeral.EphemeralResource {
+	return []func() ephemeral.EphemeralResource{}
 }

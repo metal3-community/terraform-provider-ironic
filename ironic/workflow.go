@@ -2,408 +2,612 @@ package ironic
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"log"
-	"net/http"
 	"time"
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/v1/nodes"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
-const maxRetryNumber = 3
+// ProvisionState represents the various states a node can be in.
+type ProvisionState string
 
-// provisionStateWorkflow is used to track state through the process of updating's it's provision state.
-type provisionStateWorkflow struct {
-	ctx         context.Context
-	client      *gophercloud.ServiceClient
-	node        nodes.Node
-	uuid        string
-	target      nodes.TargetProvisionState
-	wait        time.Duration
-	retryNumber int
+const (
+	// Initial states.
+	StateEnroll ProvisionState = "enroll"
 
-	configDrive any
-	deploySteps []nodes.DeployStep
-	cleanSteps  []nodes.CleanStep
+	// Management states.
+	StateManageable ProvisionState = "manageable"
 
-	operationStarted bool
+	// Inspection states.
+	StateInspecting  ProvisionState = "inspecting"
+	StateInspectFail ProvisionState = "inspect failed"
+
+	// Cleaning states.
+	StateCleaning  ProvisionState = "cleaning"
+	StateCleanFail ProvisionState = "clean failed"
+	StateCleanWait ProvisionState = "clean wait"
+
+	// Available and deployment states.
+	StateAvailable  ProvisionState = "available"
+	StateActive     ProvisionState = "active"
+	StateDeploying  ProvisionState = "deploying"
+	StateDeployFail ProvisionState = "deploy failed"
+	StateDeleting   ProvisionState = "deleting"
+	StateDeleteFail ProvisionState = "delete failed"
+
+	// Rescue states.
+	StateRescuing   ProvisionState = "rescuing"
+	StateRescued    ProvisionState = "rescued"
+	StateRescueFail ProvisionState = "rescue failed"
+	StateUnrescuing ProvisionState = "unrescuing"
+
+	// Adoption states.
+	StateAdopting  ProvisionState = "adopting"
+	StateAdoptFail ProvisionState = "adopt failed"
+)
+
+// ProvisionTarget represents the valid targets for state transitions.
+type ProvisionTarget = nodes.TargetProvisionState
+
+const (
+	TargetManage    ProvisionTarget = nodes.TargetManage
+	TargetUnmanage  ProvisionTarget = nodes.TargetManage // Use manage to go back to manageable from enroll
+	TargetInspect   ProvisionTarget = nodes.TargetInspect
+	TargetClean     ProvisionTarget = nodes.TargetClean
+	TargetAvailable ProvisionTarget = nodes.TargetProvide
+	TargetActive    ProvisionTarget = nodes.TargetActive
+	TargetDeleted   ProvisionTarget = nodes.TargetDeleted
+	TargetRescue    ProvisionTarget = nodes.TargetRescue
+	TargetUnrescue  ProvisionTarget = nodes.TargetUnrescue
+	TargetAdopt     ProvisionTarget = nodes.TargetAdopt
+	TargetAbort     ProvisionTarget = nodes.TargetAbort
+	TargetRebuild   ProvisionTarget = nodes.TargetRebuild
+)
+
+// StateTransition represents a valid state transition.
+type StateTransition struct {
+	From   ProvisionState
+	Target ProvisionTarget
+	To     ProvisionState
 }
 
-// ChangeProvisionStateToTarget drives Ironic's state machine through the process to reach our desired end state. This requires multiple
-// possibly long-running steps.  If required, we'll build a config drive ISO for deployment.
+// stateTransitions defines the valid state transitions based on the state diagram.
+var stateTransitions = []StateTransition{
+	// From enroll
+	{StateEnroll, TargetManage, StateManageable},
+
+	// From manageable
+	{StateManageable, TargetUnmanage, StateEnroll},
+	{StateManageable, TargetInspect, StateInspecting},
+	{StateManageable, TargetClean, StateCleaning},
+	{StateManageable, TargetAdopt, StateAdopting},
+
+	// From inspecting
+	{StateInspecting, TargetManage, StateManageable}, // success
+
+	// From cleaning
+	{StateCleaning, TargetAvailable, StateAvailable}, // success
+	{StateCleaning, TargetAbort, StateManageable},    // abort
+	{StateCleaning, TargetClean, StateCleaning},      // clean again
+
+	// From available
+	{StateAvailable, TargetActive, StateDeploying},
+
+	// From deploying
+	{StateDeploying, TargetActive, StateActive}, // success
+
+	// From active
+	{StateActive, TargetDeleted, StateDeleting},
+	{StateActive, TargetRebuild, StateDeploying},
+	{StateActive, TargetRescue, StateRescuing},
+
+	// From deleting
+	{StateDeleting, TargetAvailable, StateAvailable}, // success
+
+	// From rescuing
+	{StateRescuing, TargetRescue, StateRescued}, // success
+
+	// From rescued
+	{StateRescued, TargetUnrescue, StateUnrescuing},
+
+	// From unrescuing
+	{StateUnrescuing, TargetActive, StateActive}, // success
+
+	// From adopting
+	{StateAdopting, TargetManage, StateManageable}, // success
+}
+
+// getValidTransitions returns the valid transitions from a given state.
+func getValidTransitions(from ProvisionState) []StateTransition {
+	var transitions []StateTransition
+	for _, transition := range stateTransitions {
+		if transition.From == from {
+			transitions = append(transitions, transition)
+		}
+	}
+	return transitions
+}
+
+// isValidTransition checks if a transition from one state to a target is valid.
+func isValidTransition(from ProvisionState, target ProvisionTarget) bool {
+	for _, transition := range stateTransitions {
+		if transition.From == from && transition.Target == target {
+			return true
+		}
+	}
+	return false
+}
+
+// getExpectedState returns the expected state after a successful transition.
+func getExpectedState(from ProvisionState, target ProvisionTarget) (ProvisionState, bool) {
+	for _, transition := range stateTransitions {
+		if transition.From == from && transition.Target == target {
+			return transition.To, true
+		}
+	}
+	return "", false
+}
+
+// isTerminalFailureState checks if a state represents a terminal failure.
+func isTerminalFailureState(state ProvisionState) bool {
+	terminalStates := []ProvisionState{
+		StateInspectFail,
+		StateCleanFail,
+		StateDeployFail,
+		StateDeleteFail,
+		StateRescueFail,
+		StateAdoptFail,
+	}
+
+	for _, terminalState := range terminalStates {
+		if state == terminalState {
+			return true
+		}
+	}
+	return false
+}
+
+// isTransientState checks if a state is transient (will change automatically).
+func isTransientState(state ProvisionState) bool {
+	transientStates := []ProvisionState{
+		StateInspecting,
+		StateCleaning,
+		StateDeploying,
+		StateDeleting,
+		StateRescuing,
+		StateUnrescuing,
+		StateAdopting,
+		StateCleanWait,
+	}
+
+	for _, transientState := range transientStates {
+		if state == transientState {
+			return true
+		}
+	}
+	return false
+}
+
+// ChangeProvisionStateToTarget triggers a provision state change on a node.
 func ChangeProvisionStateToTarget(
 	ctx context.Context,
 	client *gophercloud.ServiceClient,
-	uuid string,
-	target nodes.TargetProvisionState,
+	nodeID string,
+	target ProvisionTarget,
 	configDrive any,
 	deploySteps []nodes.DeployStep,
 	cleanSteps []nodes.CleanStep,
 ) error {
-	// Run the provisionStateWorkflow - this could take a while
-	wf := provisionStateWorkflow{
-		target:      target,
+	// Get current node state
+	node, err := nodes.Get(ctx, client, nodeID).Extract()
+	if err != nil {
+		return fmt.Errorf("failed to get node %s: %w", nodeID, err)
+	}
+
+	currentState := ProvisionState(node.ProvisionState)
+	tflog.Info(ctx, "Starting provision state change", map[string]any{
+		"node_id":       nodeID,
+		"current_state": string(currentState),
+		"target":        string(target),
+	})
+
+	// Check if we're already in the desired final state
+	if expectedState, ok := getExpectedState(currentState, target); ok {
+		if currentState == expectedState {
+			tflog.Info(ctx, "Node already in target state", map[string]any{
+				"node_id": nodeID,
+				"state":   string(currentState),
+			})
+			return nil
+		}
+	}
+
+	// Perform the state change workflow
+	workflow := &provisionWorkflow{
+		ctx:         ctx,
 		client:      client,
-		wait:        5 * time.Second,
-		uuid:        uuid,
+		nodeID:      nodeID,
+		target:      target,
 		configDrive: configDrive,
 		deploySteps: deploySteps,
 		cleanSteps:  cleanSteps,
-		retryNumber: maxRetryNumber,
 	}
 
-	return wf.run()
+	return workflow.execute()
 }
 
-// Keep driving the state machine forward.
-func (workflow *provisionStateWorkflow) run() error {
-	log.Printf(
-		"[INFO] Beginning provisioning workflow, will try to change node to state '%s'",
-		workflow.target,
+// provisionWorkflow manages the state machine execution.
+type provisionWorkflow struct {
+	ctx         context.Context
+	client      *gophercloud.ServiceClient
+	nodeID      string
+	target      ProvisionTarget
+	configDrive any
+	deploySteps []nodes.DeployStep
+	cleanSteps  []nodes.CleanStep
+}
+
+// execute runs the provision workflow.
+func (w *provisionWorkflow) execute() error {
+	const (
+		maxAttempts  = 1000
+		pollInterval = 15 * time.Second
+		maxTimeout   = 30 * time.Minute
 	)
 
-	for {
-		log.Printf("[DEBUG] Node is in state '%s'", workflow.node.ProvisionState)
+	timeout := time.After(maxTimeout)
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
 
-		done, err := workflow.next()
-		if err != nil {
-			_ = workflow.reloadNode() // to get the lastError
-			return fmt.Errorf("%w , last error was '%s'", err, workflow.node.LastError)
-		}
-		if done {
-			return nil
-		}
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		select {
+		case <-w.ctx.Done():
+			return fmt.Errorf("context cancelled: %w", w.ctx.Err())
 
-		time.Sleep(workflow.wait)
-	}
-}
+		case <-timeout:
+			return fmt.Errorf("timeout waiting for provision state change after %v", maxTimeout)
 
-// Do the next thing to get us to our target state.
-func (workflow *provisionStateWorkflow) next() (bool, error) {
-	// Refresh the node on each run
-	if err := workflow.reloadNode(); err != nil {
-		return true, err
-	}
+		case <-ticker.C:
+			// Get current node state
+			node, err := nodes.Get(w.ctx, w.client, w.nodeID).Extract()
+			if err != nil {
+				tflog.Warn(w.ctx, "Failed to get node during workflow", map[string]any{
+					"node_id": w.nodeID,
+					"error":   err.Error(),
+				})
+				continue
+			}
 
-	log.Printf(
-		"[DEBUG] Node current state is '%s', target is %s",
-		workflow.node.ProvisionState,
-		workflow.target,
-	)
+			currentState := ProvisionState(node.ProvisionState)
+			tflog.Debug(w.ctx, "Checking workflow progress", map[string]any{
+				"node_id":       w.nodeID,
+				"current_state": string(currentState),
+				"target":        string(w.target),
+				"attempt":       attempt,
+			})
 
-	switch workflow.target {
-	case nodes.TargetManage:
-		return workflow.toManageable()
-	case nodes.TargetProvide:
-		return workflow.toAvailable()
-	case nodes.TargetActive:
-		return workflow.toActive()
-	case nodes.TargetDeleted:
-		return workflow.toDeleted()
-	case nodes.TargetClean:
-		return workflow.toClean()
-	case nodes.TargetInspect:
-		return workflow.toInspect()
-	default:
-		return true, fmt.Errorf("unknown target state '%s'", workflow.target)
-	}
-}
+			// Check if we've reached the final desired state
+			if done, err := w.checkCompletion(currentState); done {
+				return err
+			}
 
-func (workflow *provisionStateWorkflow) maybeRetry() (bool, error) {
-	state := workflow.node.ProvisionState
-	if workflow.retryNumber == 0 {
-		return true, errors.New(state)
-	}
-
-	workflow.retryNumber--
-	workflow.operationStarted = false
-	log.Printf("[DEBUG] Node %s is '%s', going to retry", workflow.uuid, state)
-
-	if state == "deploy failed" {
-		return workflow.changeProvisionState(nodes.TargetDeleted)
-	}
-	return workflow.changeProvisionState(nodes.TargetManage)
-}
-
-// Change a node to "manageable" stable.
-func (workflow *provisionStateWorkflow) toManageable() (bool, error) {
-	switch nodes.ProvisionState(workflow.node.ProvisionState) {
-	case nodes.Manageable:
-		// We're done!
-		return true, nil
-	case nodes.Enroll, nodes.Available:
-		return workflow.changeProvisionState(nodes.TargetManage)
-	case nodes.AdoptFail,
-		nodes.CleanFail,
-		nodes.InspectFail:
-		return workflow.maybeRetry()
-	case nodes.Verifying:
-		// Not done, no error - Ironic is working
-		return false, nil
-
-	default:
-		return true, fmt.Errorf(
-			"cannot go from state '%s' to state 'manageable'",
-			workflow.node.ProvisionState,
-		)
-	}
-}
-
-// Clean a node.
-func (workflow *provisionStateWorkflow) toClean() (bool, error) {
-	if !workflow.operationStarted {
-		// Node must be manageable first
-		if workflow.node.ProvisionState != string(nodes.Manageable) {
-			if err := ChangeProvisionStateToTarget(workflow.ctx, workflow.client, workflow.uuid, nodes.TargetManage, nil, nil, nil); err != nil {
-				return true, err
+			// Determine next action
+			if err := w.takeNextAction(currentState); err != nil {
+				if isTerminalFailureState(currentState) {
+					return fmt.Errorf(
+						"workflow failed in terminal state '%s': %w",
+						currentState,
+						err,
+					)
+				}
+				tflog.Warn(w.ctx, "Action failed, will retry", map[string]any{
+					"node_id": w.nodeID,
+					"error":   err.Error(),
+				})
 			}
 		}
-
-		// Set target to clean
-		_, err := workflow.changeProvisionState(nodes.TargetClean)
-		if err != nil {
-			return true, err
-		}
-
-		// Marking that we should not return to manageable any more
-		workflow.operationStarted = true
-		return false, nil
 	}
 
-	switch nodes.ProvisionState(workflow.node.ProvisionState) {
-	case nodes.Manageable:
-		return true, nil
-	case nodes.Cleaning, nodes.CleanWait:
-		// Not done, no error - Ironic is working
-		return false, nil
-	case nodes.CleanFail:
-		return workflow.maybeRetry()
+	return fmt.Errorf("workflow failed after %d attempts", maxAttempts)
+}
+
+// checkCompletion determines if the workflow is complete.
+func (w *provisionWorkflow) checkCompletion(currentState ProvisionState) (bool, error) {
+	// Check if we're in a terminal failure state
+	if isTerminalFailureState(currentState) {
+		return true, fmt.Errorf("node %s in terminal failure state: %s", w.nodeID, currentState)
+	}
+
+	// Check if we've reached the final desired state for the target
+	switch w.target {
+	case TargetManage:
+		return currentState == StateManageable, nil
+	case TargetInspect:
+		return currentState == StateManageable, nil // Inspection ends in manageable
+	case TargetClean:
+		return currentState == StateAvailable, nil // Cleaning ends in available
+	case TargetAvailable:
+		return currentState == StateAvailable, nil
+	case TargetActive:
+		return currentState == StateActive, nil
+	case TargetDeleted:
+		return currentState == StateAvailable || currentState == StateManageable, nil
+	case TargetRescue:
+		return currentState == StateRescued, nil
+	case TargetUnrescue:
+		return currentState == StateActive, nil
+	case TargetAdopt:
+		return currentState == StateManageable, nil
 	default:
-		return true, fmt.Errorf(
-			"could not clean node, node is currently '%s'",
-			workflow.node.ProvisionState,
-		)
+		return true, fmt.Errorf("unknown target: %s", w.target)
 	}
 }
 
-// Inspect a node.
-func (workflow *provisionStateWorkflow) toInspect() (bool, error) {
-	if !workflow.operationStarted {
-		// Node must be manageable first
-		if workflow.node.ProvisionState != string(nodes.Manageable) {
-			if err := ChangeProvisionStateToTarget(workflow.ctx, workflow.client, workflow.uuid, nodes.TargetManage, nil, nil, nil); err != nil {
-				return true, err
-			}
-		}
-
-		// Set target to inspect
-		_, err := workflow.changeProvisionState(nodes.TargetInspect)
-		if err != nil {
-			return true, err
-		}
-
-		// Marking that we should not return to manageable any more
-		workflow.operationStarted = true
-		return false, nil
+// takeNextAction determines and executes the next action needed.
+func (w *provisionWorkflow) takeNextAction(currentState ProvisionState) error {
+	// If we're in a transient state, just wait
+	if isTransientState(currentState) {
+		tflog.Debug(w.ctx, "Waiting for transient state to complete", map[string]any{
+			"node_id": w.nodeID,
+			"state":   string(currentState),
+		})
+		return nil
 	}
 
-	switch nodes.ProvisionState(workflow.node.ProvisionState) {
-	case nodes.Manageable:
-		return true, nil
-	case nodes.Inspecting, nodes.InspectWait:
-		// Not done, no error - Ironic is working
-		return false, nil
-	case nodes.InspectFail:
-		return workflow.maybeRetry()
-	default:
-		return true, fmt.Errorf(
-			"could not inspect node, node is currently '%s'",
-			workflow.node.ProvisionState,
+	// Determine what action to take based on current state and target
+	nextTarget := w.determineNextTarget(currentState)
+	if nextTarget == "" {
+		return fmt.Errorf(
+			"no valid transition from state '%s' for target '%s'",
+			currentState,
+			w.target,
 		)
 	}
+
+	// Execute the state change
+	return w.changeProvisionState(nextTarget)
 }
 
-// Change a node to "available" state.
-func (workflow *provisionStateWorkflow) toAvailable() (bool, error) {
-	switch nodes.ProvisionState(workflow.node.ProvisionState) {
-	case nodes.Available:
-		// We're done!
-		return true, nil
-	case nodes.Cleaning, nodes.CleanWait:
-		// Not done, no error - Ironic is working
-		log.Printf(
-			"[DEBUG] Node %s is '%s', waiting for Ironic to finish.",
-			workflow.uuid,
-			workflow.node.ProvisionState,
-		)
-		return false, nil
-	case nodes.Manageable:
-		// From manageable, we can go to provide
-		log.Printf(
-			"[DEBUG] Node %s is '%s', going to change to 'available'",
-			workflow.uuid,
-			workflow.node.ProvisionState,
-		)
-		return workflow.changeProvisionState(nodes.TargetProvide)
-	case nodes.DeployFail:
-		return workflow.maybeRetry()
-	default:
-		// Otherwise we have to get into manageable state first
-		log.Printf(
-			"[DEBUG] Node %s is '%s', going to change to 'manageable'.",
-			workflow.uuid,
-			workflow.node.ProvisionState,
-		)
-		_, err := workflow.toManageable()
-		if err != nil {
-			return true, err
-		}
-		return false, nil
+// determineNextTarget figures out the next target based on current state and desired end goal.
+func (w *provisionWorkflow) determineNextTarget(currentState ProvisionState) ProvisionTarget {
+	// Direct transitions first
+	if isValidTransition(currentState, w.target) {
+		return w.target
 	}
+
+	// Multi-step workflows - determine intermediate steps
+	switch w.target {
+	case TargetActive:
+		if currentState == StateEnroll {
+			return TargetManage
+		}
+		if currentState == StateManageable {
+			return TargetAvailable
+		}
+		if currentState == StateAvailable {
+			return TargetActive
+		}
+
+	case TargetAvailable:
+		if currentState == StateEnroll {
+			return TargetManage
+		}
+		if currentState == StateManageable {
+			return TargetAvailable
+		}
+
+	case TargetDeleted:
+		if currentState == StateActive {
+			return TargetDeleted
+		}
+
+	case TargetInspect:
+		if currentState == StateEnroll {
+			return TargetManage
+		}
+		if currentState == StateManageable {
+			return TargetInspect
+		}
+		if currentState == StateAvailable {
+			return TargetManage
+		}
+
+	case TargetClean:
+		if currentState == StateEnroll {
+			return TargetManage
+		}
+		if currentState == StateManageable {
+			return TargetClean
+		}
+	}
+
+	return ""
 }
 
-// Change a node to "active" state.
-func (workflow *provisionStateWorkflow) toActive() (bool, error) {
-	switch nodes.ProvisionState(workflow.node.ProvisionState) {
-	case nodes.Active:
-		// We're done!
-		log.Printf("[DEBUG] Node %s is 'active', we are done.", workflow.uuid)
-		return true, nil
-	case nodes.Deploying, nodes.DeployWait:
-		// Not done, no error - Ironic is working
-		log.Printf(
-			"[DEBUG] Node %s is '%s', waiting for Ironic to finish.",
-			workflow.uuid,
-			workflow.node.ProvisionState,
-		)
-		return false, nil
-	case nodes.Available:
-		// From available, we can go to active
-		log.Printf("[DEBUG] Node %s is 'available', going to change to 'active'.", workflow.uuid)
-		workflow.wait = 30 * time.Second // Deployment takes a while
-		return workflow.changeProvisionState(nodes.TargetActive)
-	default:
-		// Otherwise we have to get into available state first
-		log.Printf(
-			"[DEBUG] Node %s is '%s', going to change to 'available'.",
-			workflow.uuid,
-			workflow.node.ProvisionState,
-		)
-		_, err := workflow.toAvailable()
-		if err != nil {
-			return true, err
-		}
-		return false, nil
-	}
-}
-
-// Change a node to be "deleted," and remove the object from Ironic.
-func (workflow *provisionStateWorkflow) toDeleted() (bool, error) {
-	switch nodes.ProvisionState(workflow.node.ProvisionState) {
-	case nodes.Manageable, nodes.Available, nodes.Enroll:
-		// We're done deleting the node
-		return true, nil
-	case nodes.Cleaning, nodes.Deleting:
-		// Not done, no error - Ironic is working
-		log.Printf(
-			"[DEBUG] Node %s is '%s', waiting for Ironic to finish.",
-			workflow.uuid,
-			workflow.node.ProvisionState,
-		)
-		return false, nil
-	case nodes.Active, nodes.DeployWait, nodes.Error:
-		log.Printf(
-			"[DEBUG] Node %s is '%s', going to change to 'deleted'.",
-			workflow.uuid,
-			workflow.node.ProvisionState,
-		)
-		return workflow.changeProvisionState(nodes.TargetDeleted)
-	case nodes.DeployFail:
-		return workflow.maybeRetry()
-	case nodes.InspectFail, nodes.CleanFail:
-		// We have to get into manageable state first
-		log.Printf(
-			"[DEBUG] Node %s is '%s', going to change to 'manageable'.",
-			workflow.uuid,
-			workflow.node.ProvisionState,
-		)
-		_, err := workflow.toManageable()
-		if err != nil {
-			return true, err
-		}
-		return false, nil
-	default:
-		return true, fmt.Errorf("cannot delete node in state '%s'", workflow.node.ProvisionState)
-	}
-}
-
-// Builds the ProvisionStateOpts to send to Ironic -- including config drive.
-func (workflow *provisionStateWorkflow) buildProvisionStateOpts(
-	target nodes.TargetProvisionState,
-) *nodes.ProvisionStateOpts {
+// changeProvisionState executes a provision state change.
+func (w *provisionWorkflow) changeProvisionState(target ProvisionTarget) error {
 	opts := nodes.ProvisionStateOpts{
 		Target: target,
 	}
 
-	// If we're deploying, then build a config drive to send to Ironic
-	if target == nodes.TargetActive {
-		opts.ConfigDrive = workflow.configDrive
-
-		if workflow.deploySteps != nil {
-			opts.DeploySteps = workflow.deploySteps
+	// Add additional options based on target
+	switch target {
+	case TargetActive:
+		opts.ConfigDrive = w.configDrive
+		if w.deploySteps != nil {
+			opts.DeploySteps = w.deploySteps
 		}
-	}
-	if target == nodes.TargetClean {
-		if workflow.cleanSteps != nil {
-			opts.CleanSteps = workflow.cleanSteps
+	case TargetClean:
+		if w.cleanSteps != nil {
+			opts.CleanSteps = w.cleanSteps
 		} else {
 			opts.CleanSteps = []nodes.CleanStep{}
 		}
 	}
 
-	return &opts
-}
+	tflog.Info(w.ctx, "Executing provision state change", map[string]any{
+		"node_id": w.nodeID,
+		"target":  string(target),
+	})
 
-// Call Ironic's API and issue the change provision state request.
-func (workflow *provisionStateWorkflow) changeProvisionState(
-	target nodes.TargetProvisionState,
-) (bool, error) {
-	opts := workflow.buildProvisionStateOpts(target)
-
-	if target == nodes.TargetClean && len(opts.CleanSteps) == 0 {
-		return true, nil
+	err := nodes.ChangeProvisionState(w.ctx, w.client, w.nodeID, opts).ExtractErr()
+	if err != nil {
+		return fmt.Errorf("failed to change provision state to '%s': %w", target, err)
 	}
 
-	interval := 5 * time.Second
-	for range 5 {
-		err := nodes.ChangeProvisionState(workflow.ctx, workflow.client, workflow.uuid, *opts).
-			ExtractErr()
-		if err != nil {
-			if gophercloud.ResponseCodeIs(err, http.StatusConflict) {
-				log.Printf(
-					"[DEBUG] Failed to change provision state: ironic is busy, will retry in %s.",
-					interval.String(),
-				)
-				time.Sleep(interval)
-				interval *= 2
+	return nil
+}
+
+// WaitForTargetProvisionState waits for a node to reach a specific state.
+func WaitForTargetProvisionState(
+	ctx context.Context,
+	client *gophercloud.ServiceClient,
+	nodeID string,
+	targetState ProvisionState,
+) error {
+	const (
+		pollInterval = 10 * time.Second
+		maxTimeout   = 30 * time.Minute
+	)
+
+	timeout := time.After(maxTimeout)
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	tflog.Debug(ctx, "Waiting for provision state", map[string]any{
+		"node_id":       nodeID,
+		"target_state":  string(targetState),
+		"poll_interval": pollInterval.String(),
+		"max_timeout":   maxTimeout.String(),
+	})
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("context cancelled while waiting for provision state: %w", ctx.Err())
+
+		case <-timeout:
+			return fmt.Errorf("timeout waiting for node %s to reach state '%s' after %v",
+				nodeID, targetState, maxTimeout)
+
+		case <-ticker.C:
+			node, err := nodes.Get(ctx, client, nodeID).Extract()
+			if err != nil {
+				tflog.Warn(ctx, "Failed to get node during state wait", map[string]any{
+					"node_id": nodeID,
+					"error":   err.Error(),
+				})
 				continue
 			}
-		} else {
-			return true, nil
+
+			currentState := ProvisionState(node.ProvisionState)
+			tflog.Debug(ctx, "Checking provision state", map[string]any{
+				"node_id":       nodeID,
+				"current_state": string(currentState),
+				"target_state":  string(targetState),
+				"last_error":    node.LastError,
+			})
+
+			// Check if we've reached the target state
+			if currentState == targetState {
+				return nil
+			}
+
+			// Check if we're in a terminal failure state
+			if isTerminalFailureState(currentState) {
+				errorMsg := "unknown error"
+				if node.LastError != "" {
+					errorMsg = node.LastError
+				}
+				return fmt.Errorf("node %s entered terminal failure state '%s': %s",
+					nodeID, currentState, errorMsg)
+			}
+		}
+	}
+}
+
+// GetNodeProvisionState returns the current provision state of a node.
+func GetNodeProvisionState(
+	ctx context.Context,
+	client *gophercloud.ServiceClient,
+	nodeID string,
+) (ProvisionState, error) {
+	node, err := nodes.Get(ctx, client, nodeID).Extract()
+	if err != nil {
+		return "", fmt.Errorf("failed to get node %s: %w", nodeID, err)
+	}
+
+	return ProvisionState(node.ProvisionState), nil
+}
+
+// ValidateProvisionState checks if a provision state string is valid.
+func ValidateProvisionState(state string) error {
+	validStates := []ProvisionState{
+		StateEnroll, StateManageable, StateInspecting, StateInspectFail,
+		StateCleaning, StateCleanFail, StateCleanWait, StateAvailable,
+		StateActive, StateDeploying, StateDeployFail, StateDeleting,
+		StateDeleteFail, StateRescuing, StateRescued, StateRescueFail,
+		StateUnrescuing, StateAdopting, StateAdoptFail,
+	}
+
+	for _, validState := range validStates {
+		if ProvisionState(state) == validState {
+			return nil
 		}
 	}
 
-	return false, fmt.Errorf(
-		"failed to change provision state for node %s to %s",
-		workflow.uuid,
-		target,
-	)
+	return fmt.Errorf("invalid provision state: %s", state)
 }
 
-// Call Ironic's API and reload the node's current state.
-func (workflow *provisionStateWorkflow) reloadNode() error {
-	return nodes.Get(workflow.ctx, workflow.client, workflow.uuid).
-		ExtractInto(&workflow.node)
+// GetValidTargetsFromState returns the valid provision targets from a given state.
+func GetValidTargetsFromState(state ProvisionState) []ProvisionTarget {
+	var targets []ProvisionTarget
+	transitions := getValidTransitions(state)
+
+	for _, transition := range transitions {
+		targets = append(targets, transition.Target)
+	}
+
+	return targets
+}
+
+// ProvisionStateError represents an error with provision state context.
+type ProvisionStateError struct {
+	NodeID       string
+	CurrentState ProvisionState
+	TargetState  ProvisionTarget
+	Err          error
+}
+
+func (e *ProvisionStateError) Error() string {
+	return fmt.Sprintf("provision state error for node %s (current: %s, target: %s): %v",
+		e.NodeID, e.CurrentState, e.TargetState, e.Err)
+}
+
+func (e *ProvisionStateError) Unwrap() error {
+	return e.Err
+}
+
+// AddProvisionStateError is a helper to add provision state errors to diagnostics.
+func AddProvisionStateError(
+	diags *diag.Diagnostics,
+	nodeID string,
+	currentState ProvisionState,
+	targetState ProvisionTarget,
+	err error,
+) {
+	provisionErr := &ProvisionStateError{
+		NodeID:       nodeID,
+		CurrentState: currentState,
+		TargetState:  targetState,
+		Err:          err,
+	}
+
+	diags.AddError(
+		"Provision State Change Failed",
+		provisionErr.Error(),
+	)
 }

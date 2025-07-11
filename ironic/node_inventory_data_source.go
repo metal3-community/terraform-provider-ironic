@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/appkins-org/terraform-provider-ironic/ironic/models"
 	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/v1/nodes"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
@@ -44,7 +45,7 @@ type inventoryInventoryModel struct {
 type inventoryCPUModel struct {
 	Architecture types.String `tfsdk:"architecture"`
 	Count        types.Int64  `tfsdk:"count"`
-	Frequency    types.String `tfsdk:"frequency"`
+	Frequency    types.Int64  `tfsdk:"frequency"`
 	Flags        types.List   `tfsdk:"flags"`
 	ModelName    types.String `tfsdk:"model_name"`
 }
@@ -145,7 +146,7 @@ func (d *NodeInventoryDataSource) Schema(
 						MarkdownDescription: "Number of CPU cores.",
 						Computed:            true,
 					},
-					"frequency": schema.StringAttribute{
+					"frequency": schema.Int64Attribute{
 						MarkdownDescription: "CPU frequency.",
 						Computed:            true,
 					},
@@ -341,9 +342,10 @@ func (d *NodeInventoryDataSource) Read(
 
 	nodeUUID := config.UUID.ValueString()
 	tflog.Debug(ctx, "Getting inventory data for node", map[string]any{"uuid": nodeUUID})
+	var inventoryData *models.InventoryData
 
 	// Get inventory data using nodes.GetInventory
-	inventoryData, err := nodes.GetInventory(ctx, client, nodeUUID).Extract()
+	err = nodes.GetInventory(ctx, client, nodeUUID).ExtractInto(&inventoryData)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Unable to Get Node Inventory",
@@ -364,10 +366,20 @@ func (d *NodeInventoryDataSource) Read(
 		}
 
 		// CPU information
+		var cpuFreq int64
+		if cpuFreqN, err := inventoryData.Inventory.CPU.Frequency.Int64(); err == nil {
+			cpuFreq = cpuFreqN
+		} else {
+			resp.Diagnostics.AddError(
+				"Unable to Get CPU Frequency",
+				fmt.Sprintf("Unable to get CPU frequency for node %s: %s", nodeUUID, err),
+			)
+			return
+		}
 		config.CPU = &inventoryCPUModel{
 			Architecture: types.StringValue(inventoryData.Inventory.CPU.Architecture),
 			Count:        types.Int64Value(int64(inventoryData.Inventory.CPU.Count)),
-			Frequency:    types.StringValue(inventoryData.Inventory.CPU.Frequency),
+			Frequency:    types.Int64Value(cpuFreq),
 			ModelName:    types.StringValue(inventoryData.Inventory.CPU.ModelName),
 		}
 

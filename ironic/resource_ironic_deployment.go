@@ -784,11 +784,26 @@ func convertNetworkData(networkData map[string]any) (map[string]any, error) {
 // support sending the user data directly, otherwise we need to build an ISO image.
 func buildConfigDrive(
 	apiVersion string,
-	userData any,
+	userDataMap map[string]any,
 	networkData, metaData map[string]any,
 ) (any, error) {
 	var networkDataU map[string]any
 	var err error
+	var userData any
+
+	if len(userDataMap) == 1 && userDataMap["value"] != nil {
+		// If user_data is a single value, convert it to a string
+		if userDataStr, ok := userDataMap["value"].(string); !ok {
+			return nil, fmt.Errorf(
+				"user_data must be a string when only one key is present, got %T",
+				userDataMap["value"],
+			)
+		} else {
+			userData = userDataStr
+		}
+	} else {
+		userData = userDataMap
+	}
 
 	if networkData != nil {
 		networkDataU, err = convertNetworkData(networkData)

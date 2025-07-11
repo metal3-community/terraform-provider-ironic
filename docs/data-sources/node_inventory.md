@@ -37,7 +37,7 @@ Read-Only:
 - `architecture` (String) CPU architecture (e.g., x86_64).
 - `count` (Number) Number of CPU cores.
 - `flags` (List of String) List of CPU flags.
-- `frequency` (String) CPU frequency.
+- `frequency` (Number) CPU frequency.
 - `model_name` (String) CPU model name.
 
 

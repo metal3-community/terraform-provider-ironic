@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/httpbasic"
@@ -17,7 +16,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
-	"github.com/metal3-community/terraform-provider-ironic/ironic/util/retry"
 )
 
 // Meta stores the client connection information for Ironic.
@@ -234,25 +232,6 @@ func (p *IronicProvider) Configure(
 		}
 		ironic.Microversion = microversion
 		meta.Client = ironic
-	}
-
-	// Set timeout with default value of 0
-	timeout := time.Second * 120
-
-	if err := retry.RetryContext(ctx, timeout, func() *retry.RetryError {
-		tflog.Debug(ctx, "Checking Ironic API availability", map[string]any{"timeout": timeout})
-		err := healthCheck(ctx, meta.Client)
-		if err != nil {
-			return retry.RetryableError(err)
-		}
-		tflog.Info(ctx, "Ironic API is available")
-		return nil
-	}); err != nil {
-		res.Diagnostics.AddError(
-			"Could not connect to Ironic API",
-			fmt.Sprintf("Error: %s", err.Error()),
-		)
-		return
 	}
 
 	res.DataSourceData = &meta

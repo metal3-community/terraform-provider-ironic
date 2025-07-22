@@ -97,7 +97,9 @@ var stateTransitions = []StateTransition{
 	{StateAvailable, TargetActive, StateDeploying},
 
 	// From deploying
-	{StateDeploying, TargetActive, StateActive}, // success
+	{StateDeploying, TargetActive, StateActive},     // success
+	{StateDeployFail, TargetDeleted, StateDeleting}, // failure
+	{StateDeploying, TargetAbort, StateDeployFail},  // abort
 
 	// From active
 	{StateActive, TargetDeleted, StateDeleting},

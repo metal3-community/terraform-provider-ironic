@@ -687,8 +687,7 @@ func buildDeploySteps(
 	ctx context.Context,
 	dSteps []deployStepModel,
 	deploySteps *[]nodes.DeployStep,
-) diag.Diagnostics {
-	diags := diag.Diagnostics{}
+) (diags diag.Diagnostics) {
 	// Convert deploy steps to nodes.DeployStep
 	if len(dSteps) == 0 {
 		diags.AddWarning(

@@ -300,13 +300,15 @@ func (r *allocationV1Resource) Create(
 	plan.ID = types.StringValue(allocation.UUID)
 
 	// Wait for allocation to complete
-	if err := r.waitForAllocationComplete(ctx, allocation.UUID, &plan, &resp.Diagnostics); err != nil {
-		resp.Diagnostics.AddError(
-			"Error waiting for allocation completion",
-			fmt.Sprintf("Could not wait for allocation to complete: %s", err),
-		)
+	resp.Diagnostics.Append(r.waitForAllocationComplete(ctx, allocation.UUID, &plan)...)
+	if resp.Diagnostics.HasError() {
 		// Clean up the allocation if it failed
-		_ = allocations.Delete(ctx, r.meta.Client, allocation.UUID).ExtractErr()
+		if err := allocations.Delete(ctx, r.meta.Client, allocation.UUID).ExtractErr(); err != nil {
+			resp.Diagnostics.AddError(
+				"Error cleaning up allocation",
+				fmt.Sprintf("Could not clean up allocation %s: %s", allocation.UUID, err),
+			)
+		}
 		return
 	}
 
@@ -330,7 +332,7 @@ func (r *allocationV1Resource) Read(
 	}
 
 	// Read the allocation from the API
-	r.readAllocationData(ctx, &state, &resp.Diagnostics)
+	resp.Diagnostics.Append(r.readAllocationData(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -402,16 +404,15 @@ func (r *allocationV1Resource) waitForAllocationComplete(
 	ctx context.Context,
 	allocationID string,
 	model *allocationV1ResourceModel,
-	diagnostics *diag.Diagnostics,
-) error {
+) (diagnostics diag.Diagnostics) {
 	timeout := 1 * time.Minute
 	checkInterval := 2 * time.Second
 
 	for {
 		// Read current allocation state
-		r.readAllocationData(ctx, model, diagnostics)
+		diagnostics.Append(r.readAllocationData(ctx, model)...)
 		if diagnostics.HasError() {
-			return fmt.Errorf("error reading allocation during wait")
+			return diagnostics
 		}
 
 		state := model.State.ValueString()
@@ -426,11 +427,13 @@ func (r *allocationV1Resource) waitForAllocationComplete(
 			checkInterval += 2 * time.Second
 			timeout -= checkInterval
 			if timeout < 0 {
-				return fmt.Errorf("timed out waiting for allocation")
+				diagnostics.AddError("timed out waiting for allocation", "timeout exceeded")
+				return diagnostics
 			}
 		case "error":
 			errorMsg := model.LastError.ValueString()
-			return fmt.Errorf("error creating allocation: %s", errorMsg)
+			diagnostics.AddError("error creating allocation", errorMsg)
+			return diagnostics
 		default:
 			// Allocation completed (active, etc.)
 			return nil
@@ -442,8 +445,7 @@ func (r *allocationV1Resource) waitForAllocationComplete(
 func (r *allocationV1Resource) readAllocationData(
 	ctx context.Context,
 	model *allocationV1ResourceModel,
-	diagnostics *diag.Diagnostics,
-) {
+) (diagnostics diag.Diagnostics) {
 	allocation, err := allocations.Get(ctx, r.meta.Client, model.ID.ValueString()).Extract()
 	if err != nil {
 		diagnostics.AddError(
@@ -483,7 +485,7 @@ func (r *allocationV1Resource) readAllocationData(
 		candidateNodesList, diags := types.ListValue(types.StringType, candidateNodesValues)
 		diagnostics.Append(diags...)
 		if diagnostics.HasError() {
-			return
+			return diagnostics
 		}
 		model.CandidateNodes = candidateNodesList
 	} else {
@@ -499,7 +501,7 @@ func (r *allocationV1Resource) readAllocationData(
 		traitsList, diags := types.ListValue(types.StringType, traitsValues)
 		diagnostics.Append(diags...)
 		if diagnostics.HasError() {
-			return
+			return diagnostics
 		}
 		model.Traits = traitsList
 	} else {
@@ -520,4 +522,5 @@ func (r *allocationV1Resource) readAllocationData(
 	} else {
 		model.Extra = types.DynamicNull()
 	}
+	return diagnostics
 }

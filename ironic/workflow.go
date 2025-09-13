@@ -3,6 +3,7 @@ package ironic
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/gophercloud/gophercloud/v2"
@@ -11,119 +12,66 @@ import (
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
-// ProvisionState represents the various states a node can be in.
-type ProvisionState string
-
-const (
-	// Initial states.
-	StateEnroll ProvisionState = "enroll"
-
-	// Management states.
-	StateManageable ProvisionState = "manageable"
-
-	// Inspection states.
-	StateInspecting  ProvisionState = "inspecting"
-	StateInspectFail ProvisionState = "inspect failed"
-
-	// Cleaning states.
-	StateCleaning  ProvisionState = "cleaning"
-	StateCleanFail ProvisionState = "clean failed"
-	StateCleanWait ProvisionState = "clean wait"
-
-	// Available and deployment states.
-	StateAvailable  ProvisionState = "available"
-	StateActive     ProvisionState = "active"
-	StateDeploying  ProvisionState = "deploying"
-	StateDeployFail ProvisionState = "deploy failed"
-	StateDeleting   ProvisionState = "deleting"
-	StateDeleteFail ProvisionState = "delete failed"
-
-	// Rescue states.
-	StateRescuing   ProvisionState = "rescuing"
-	StateRescued    ProvisionState = "rescued"
-	StateRescueFail ProvisionState = "rescue failed"
-	StateUnrescuing ProvisionState = "unrescuing"
-
-	// Adoption states.
-	StateAdopting  ProvisionState = "adopting"
-	StateAdoptFail ProvisionState = "adopt failed"
-)
-
-// ProvisionTarget represents the valid targets for state transitions.
-type ProvisionTarget = nodes.TargetProvisionState
-
-const (
-	TargetManage    ProvisionTarget = nodes.TargetManage
-	TargetUnmanage  ProvisionTarget = nodes.TargetManage // Use manage to go back to manageable from enroll
-	TargetInspect   ProvisionTarget = nodes.TargetInspect
-	TargetClean     ProvisionTarget = nodes.TargetClean
-	TargetAvailable ProvisionTarget = nodes.TargetProvide
-	TargetActive    ProvisionTarget = nodes.TargetActive
-	TargetDeleted   ProvisionTarget = nodes.TargetDeleted
-	TargetRescue    ProvisionTarget = nodes.TargetRescue
-	TargetUnrescue  ProvisionTarget = nodes.TargetUnrescue
-	TargetAdopt     ProvisionTarget = nodes.TargetAdopt
-	TargetAbort     ProvisionTarget = nodes.TargetAbort
-	TargetRebuild   ProvisionTarget = nodes.TargetRebuild
-)
-
 // StateTransition represents a valid state transition.
 type StateTransition struct {
-	From   ProvisionState
-	Target ProvisionTarget
-	To     ProvisionState
+	From   nodes.ProvisionState
+	Target nodes.TargetProvisionState
+	To     nodes.ProvisionState
 }
 
 // stateTransitions defines the valid state transitions based on the state diagram.
 var stateTransitions = []StateTransition{
 	// From enroll
-	{StateEnroll, TargetManage, StateManageable},
+	{nodes.Enroll, nodes.TargetManage, nodes.Manageable},
+
+	// From error
+	{nodes.Error, nodes.TargetDeleted, nodes.Deploying},
 
 	// From manageable
-	{StateManageable, TargetUnmanage, StateEnroll},
-	{StateManageable, TargetInspect, StateInspecting},
-	{StateManageable, TargetClean, StateCleaning},
-	{StateManageable, TargetAdopt, StateAdopting},
+	{nodes.Manageable, nodes.TargetManage, nodes.Enroll},
+	{nodes.Manageable, nodes.TargetInspect, nodes.Inspecting},
+	{nodes.Manageable, nodes.TargetClean, nodes.Cleaning},
+	{nodes.Manageable, nodes.TargetAdopt, nodes.Adopting},
 
 	// From inspecting
-	{StateInspecting, TargetManage, StateManageable}, // success
+	{nodes.Inspecting, nodes.TargetManage, nodes.Manageable}, // success
 
 	// From cleaning
-	{StateCleaning, TargetAvailable, StateAvailable}, // success
-	{StateCleaning, TargetAbort, StateManageable},    // abort
-	{StateCleaning, TargetClean, StateCleaning},      // clean again
+	{nodes.Cleaning, nodes.TargetProvide, nodes.Available}, // success
+	{nodes.Cleaning, nodes.TargetAbort, nodes.Manageable},  // abort
+	{nodes.Cleaning, nodes.TargetClean, nodes.Cleaning},    // clean again
 
 	// From available
-	{StateAvailable, TargetActive, StateDeploying},
+	{nodes.Available, nodes.TargetActive, nodes.Deploying},
 
 	// From deploying
-	{StateDeploying, TargetActive, StateActive},     // success
-	{StateDeployFail, TargetDeleted, StateDeleting}, // failure
-	{StateDeploying, TargetAbort, StateDeployFail},  // abort
+	{nodes.Deploying, nodes.TargetActive, nodes.Active},     // success
+	{nodes.DeployFail, nodes.TargetDeleted, nodes.Deleting}, // failure
+	{nodes.Deploying, nodes.TargetAbort, nodes.DeployFail},  // abort
 
 	// From active
-	{StateActive, TargetDeleted, StateDeleting},
-	{StateActive, TargetRebuild, StateDeploying},
-	{StateActive, TargetRescue, StateRescuing},
+	{nodes.Active, nodes.TargetDeleted, nodes.Deleting},
+	{nodes.Active, nodes.TargetRebuild, nodes.Deploying},
+	{nodes.Active, nodes.TargetRescue, nodes.Rescuing},
 
 	// From deleting
-	{StateDeleting, TargetAvailable, StateAvailable}, // success
+	{nodes.Deleting, nodes.TargetProvide, nodes.Available}, // success
 
 	// From rescuing
-	{StateRescuing, TargetRescue, StateRescued}, // success
+	{nodes.Rescuing, nodes.TargetRescue, nodes.Rescue}, // success
 
 	// From rescued
-	{StateRescued, TargetUnrescue, StateUnrescuing},
+	{nodes.Rescue, nodes.TargetUnrescue, nodes.Unrescuing},
 
 	// From unrescuing
-	{StateUnrescuing, TargetActive, StateActive}, // success
+	{nodes.Unrescuing, nodes.TargetActive, nodes.Active}, // success
 
 	// From adopting
-	{StateAdopting, TargetManage, StateManageable}, // success
+	{nodes.Adopting, nodes.TargetManage, nodes.Manageable}, // success
 }
 
 // getValidTransitions returns the valid transitions from a given state.
-func getValidTransitions(from ProvisionState) []StateTransition {
+func getValidTransitions(from nodes.ProvisionState) []StateTransition {
 	var transitions []StateTransition
 	for _, transition := range stateTransitions {
 		if transition.From == from {
@@ -134,7 +82,7 @@ func getValidTransitions(from ProvisionState) []StateTransition {
 }
 
 // isValidTransition checks if a transition from one state to a target is valid.
-func isValidTransition(from ProvisionState, target ProvisionTarget) bool {
+func isValidTransition(from nodes.ProvisionState, target nodes.TargetProvisionState) bool {
 	for _, transition := range stateTransitions {
 		if transition.From == from && transition.Target == target {
 			return true
@@ -144,7 +92,10 @@ func isValidTransition(from ProvisionState, target ProvisionTarget) bool {
 }
 
 // getExpectedState returns the expected state after a successful transition.
-func getExpectedState(from ProvisionState, target ProvisionTarget) (ProvisionState, bool) {
+func getExpectedState(
+	from nodes.ProvisionState,
+	target nodes.TargetProvisionState,
+) (nodes.ProvisionState, bool) {
 	for _, transition := range stateTransitions {
 		if transition.From == from && transition.Target == target {
 			return transition.To, true
@@ -154,43 +105,33 @@ func getExpectedState(from ProvisionState, target ProvisionTarget) (ProvisionSta
 }
 
 // isTerminalFailureState checks if a state represents a terminal failure.
-func isTerminalFailureState(state ProvisionState) bool {
-	terminalStates := []ProvisionState{
-		StateInspectFail,
-		StateCleanFail,
-		StateDeployFail,
-		StateDeleteFail,
-		StateRescueFail,
-		StateAdoptFail,
+func isTerminalFailureState(state nodes.ProvisionState) bool {
+	terminalStates := []nodes.ProvisionState{
+		nodes.InspectFail,
+		nodes.CleanFail,
+		nodes.DeployFail,
+		nodes.Error,
+		nodes.RescueFail,
+		nodes.AdoptFail,
 	}
 
-	for _, terminalState := range terminalStates {
-		if state == terminalState {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(terminalStates, state)
 }
 
 // isTransientState checks if a state is transient (will change automatically).
-func isTransientState(state ProvisionState) bool {
-	transientStates := []ProvisionState{
-		StateInspecting,
-		StateCleaning,
-		StateDeploying,
-		StateDeleting,
-		StateRescuing,
-		StateUnrescuing,
-		StateAdopting,
-		StateCleanWait,
+func isTransientState(state nodes.ProvisionState) bool {
+	transientStates := []nodes.ProvisionState{
+		nodes.Inspecting,
+		nodes.Cleaning,
+		nodes.Deploying,
+		nodes.Deleting,
+		nodes.Rescuing,
+		nodes.Unrescuing,
+		nodes.Adopting,
+		nodes.CleanWait,
 	}
 
-	for _, transientState := range transientStates {
-		if state == transientState {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(transientStates, state)
 }
 
 // ChangeProvisionStateToTarget triggers a provision state change on a node.
@@ -198,7 +139,7 @@ func ChangeProvisionStateToTarget(
 	ctx context.Context,
 	client *gophercloud.ServiceClient,
 	nodeID string,
-	target ProvisionTarget,
+	target nodes.TargetProvisionState,
 	configDrive any,
 	deploySteps []nodes.DeployStep,
 	cleanSteps []nodes.CleanStep,
@@ -209,7 +150,7 @@ func ChangeProvisionStateToTarget(
 		return fmt.Errorf("failed to get node %s: %w", nodeID, err)
 	}
 
-	currentState := ProvisionState(node.ProvisionState)
+	currentState := nodes.ProvisionState(node.ProvisionState)
 	tflog.Info(ctx, "Starting provision state change", map[string]any{
 		"node_id":       nodeID,
 		"current_state": string(currentState),
@@ -246,7 +187,7 @@ type provisionWorkflow struct {
 	ctx         context.Context
 	client      *gophercloud.ServiceClient
 	nodeID      string
-	target      ProvisionTarget
+	target      nodes.TargetProvisionState
 	configDrive any
 	deploySteps []nodes.DeployStep
 	cleanSteps  []nodes.CleanStep
@@ -283,7 +224,7 @@ func (w *provisionWorkflow) execute() error {
 				continue
 			}
 
-			currentState := ProvisionState(node.ProvisionState)
+			currentState := nodes.ProvisionState(node.ProvisionState)
 			tflog.Debug(w.ctx, "Checking workflow progress", map[string]any{
 				"node_id":       w.nodeID,
 				"current_state": string(currentState),
@@ -317,7 +258,7 @@ func (w *provisionWorkflow) execute() error {
 }
 
 // checkCompletion determines if the workflow is complete.
-func (w *provisionWorkflow) checkCompletion(currentState ProvisionState) (bool, error) {
+func (w *provisionWorkflow) checkCompletion(currentState nodes.ProvisionState) (bool, error) {
 	// Check if we're in a terminal failure state
 	if isTerminalFailureState(currentState) {
 		return true, fmt.Errorf("node %s in terminal failure state: %s", w.nodeID, currentState)
@@ -325,31 +266,31 @@ func (w *provisionWorkflow) checkCompletion(currentState ProvisionState) (bool, 
 
 	// Check if we've reached the final desired state for the target
 	switch w.target {
-	case TargetManage:
-		return currentState == StateManageable, nil
-	case TargetInspect:
-		return currentState == StateManageable, nil // Inspection ends in manageable
-	case TargetClean:
-		return currentState == StateAvailable, nil // Cleaning ends in available
-	case TargetAvailable:
-		return currentState == StateAvailable, nil
-	case TargetActive:
-		return currentState == StateActive, nil
-	case TargetDeleted:
-		return currentState == StateAvailable || currentState == StateManageable, nil
-	case TargetRescue:
-		return currentState == StateRescued, nil
-	case TargetUnrescue:
-		return currentState == StateActive, nil
-	case TargetAdopt:
-		return currentState == StateManageable, nil
+	case nodes.TargetManage:
+		return currentState == nodes.Manageable, nil
+	case nodes.TargetInspect:
+		return currentState == nodes.Manageable, nil // Inspection ends in manageable
+	case nodes.TargetClean:
+		return currentState == nodes.Available, nil // Cleaning ends in available
+	case nodes.TargetProvide:
+		return currentState == nodes.Available, nil
+	case nodes.TargetActive:
+		return currentState == nodes.Active, nil
+	case nodes.TargetDeleted:
+		return currentState == nodes.Available || currentState == nodes.Manageable, nil
+	case nodes.TargetRescue:
+		return currentState == nodes.Rescue, nil
+	case nodes.TargetUnrescue:
+		return currentState == nodes.Active, nil
+	case nodes.TargetAdopt:
+		return currentState == nodes.Manageable, nil
 	default:
 		return true, fmt.Errorf("unknown target: %s", w.target)
 	}
 }
 
 // takeNextAction determines and executes the next action needed.
-func (w *provisionWorkflow) takeNextAction(currentState ProvisionState) error {
+func (w *provisionWorkflow) takeNextAction(currentState nodes.ProvisionState) error {
 	// If we're in a transient state, just wait
 	if isTransientState(currentState) {
 		tflog.Debug(w.ctx, "Waiting for transient state to complete", map[string]any{
@@ -374,7 +315,9 @@ func (w *provisionWorkflow) takeNextAction(currentState ProvisionState) error {
 }
 
 // determineNextTarget figures out the next target based on current state and desired end goal.
-func (w *provisionWorkflow) determineNextTarget(currentState ProvisionState) ProvisionTarget {
+func (w *provisionWorkflow) determineNextTarget(
+	currentState nodes.ProvisionState,
+) nodes.TargetProvisionState {
 	// Direct transitions first
 	if isValidTransition(currentState, w.target) {
 		return w.target
@@ -382,47 +325,47 @@ func (w *provisionWorkflow) determineNextTarget(currentState ProvisionState) Pro
 
 	// Multi-step workflows - determine intermediate steps
 	switch w.target {
-	case TargetActive:
-		if currentState == StateEnroll {
-			return TargetManage
+	case nodes.TargetActive:
+		if currentState == nodes.Enroll {
+			return nodes.TargetManage
 		}
-		if currentState == StateManageable {
-			return TargetAvailable
+		if currentState == nodes.Manageable {
+			return nodes.TargetProvide
 		}
-		if currentState == StateAvailable {
-			return TargetActive
-		}
-
-	case TargetAvailable:
-		if currentState == StateEnroll {
-			return TargetManage
-		}
-		if currentState == StateManageable {
-			return TargetAvailable
+		if currentState == nodes.Available {
+			return nodes.TargetActive
 		}
 
-	case TargetDeleted:
-		if currentState == StateActive {
-			return TargetDeleted
+	case nodes.TargetProvide:
+		if currentState == nodes.Enroll {
+			return nodes.TargetManage
+		}
+		if currentState == nodes.Manageable {
+			return nodes.TargetProvide
 		}
 
-	case TargetInspect:
-		if currentState == StateEnroll {
-			return TargetManage
-		}
-		if currentState == StateManageable {
-			return TargetInspect
-		}
-		if currentState == StateAvailable {
-			return TargetManage
+	case nodes.TargetDeleted:
+		if currentState == nodes.Active {
+			return nodes.TargetDeleted
 		}
 
-	case TargetClean:
-		if currentState == StateEnroll {
-			return TargetManage
+	case nodes.TargetInspect:
+		if currentState == nodes.Enroll {
+			return nodes.TargetManage
 		}
-		if currentState == StateManageable {
-			return TargetClean
+		if currentState == nodes.Manageable {
+			return nodes.TargetInspect
+		}
+		if currentState == nodes.Available {
+			return nodes.TargetManage
+		}
+
+	case nodes.TargetClean:
+		if currentState == nodes.Enroll {
+			return nodes.TargetManage
+		}
+		if currentState == nodes.Manageable {
+			return nodes.TargetClean
 		}
 	}
 
@@ -430,19 +373,19 @@ func (w *provisionWorkflow) determineNextTarget(currentState ProvisionState) Pro
 }
 
 // changeProvisionState executes a provision state change.
-func (w *provisionWorkflow) changeProvisionState(target ProvisionTarget) error {
+func (w *provisionWorkflow) changeProvisionState(target nodes.TargetProvisionState) error {
 	opts := nodes.ProvisionStateOpts{
 		Target: target,
 	}
 
 	// Add additional options based on target
 	switch target {
-	case TargetActive:
+	case nodes.TargetActive:
 		opts.ConfigDrive = w.configDrive
 		if w.deploySteps != nil {
 			opts.DeploySteps = w.deploySteps
 		}
-	case TargetClean:
+	case nodes.TargetClean:
 		if w.cleanSteps != nil {
 			opts.CleanSteps = w.cleanSteps
 		} else {
@@ -468,7 +411,7 @@ func WaitForTargetProvisionState(
 	ctx context.Context,
 	client *gophercloud.ServiceClient,
 	nodeID string,
-	targetState ProvisionState,
+	targetState nodes.ProvisionState,
 ) error {
 	const (
 		pollInterval = 10 * time.Second
@@ -505,7 +448,7 @@ func WaitForTargetProvisionState(
 				continue
 			}
 
-			currentState := ProvisionState(node.ProvisionState)
+			currentState := nodes.ProvisionState(node.ProvisionState)
 			tflog.Debug(ctx, "Checking provision state", map[string]any{
 				"node_id":       nodeID,
 				"current_state": string(currentState),
@@ -536,37 +479,35 @@ func GetNodeProvisionState(
 	ctx context.Context,
 	client *gophercloud.ServiceClient,
 	nodeID string,
-) (ProvisionState, error) {
+) (nodes.ProvisionState, error) {
 	node, err := nodes.Get(ctx, client, nodeID).Extract()
 	if err != nil {
 		return "", fmt.Errorf("failed to get node %s: %w", nodeID, err)
 	}
 
-	return ProvisionState(node.ProvisionState), nil
+	return nodes.ProvisionState(node.ProvisionState), nil
 }
 
 // ValidateProvisionState checks if a provision state string is valid.
 func ValidateProvisionState(state string) error {
-	validStates := []ProvisionState{
-		StateEnroll, StateManageable, StateInspecting, StateInspectFail,
-		StateCleaning, StateCleanFail, StateCleanWait, StateAvailable,
-		StateActive, StateDeploying, StateDeployFail, StateDeleting,
-		StateDeleteFail, StateRescuing, StateRescued, StateRescueFail,
-		StateUnrescuing, StateAdopting, StateAdoptFail,
+	validStates := []nodes.ProvisionState{
+		nodes.Enroll, nodes.Manageable, nodes.Inspecting, nodes.InspectFail,
+		nodes.Cleaning, nodes.CleanFail, nodes.CleanWait, nodes.Available,
+		nodes.Active, nodes.Deploying, nodes.DeployFail, nodes.Deleting,
+		nodes.Error, nodes.Rescuing, nodes.Rescue, nodes.RescueFail,
+		nodes.Unrescuing, nodes.Adopting, nodes.AdoptFail,
 	}
 
-	for _, validState := range validStates {
-		if ProvisionState(state) == validState {
-			return nil
-		}
+	if slices.Contains(validStates, nodes.ProvisionState(state)) {
+		return nil
 	}
 
 	return fmt.Errorf("invalid provision state: %s", state)
 }
 
 // GetValidTargetsFromState returns the valid provision targets from a given state.
-func GetValidTargetsFromState(state ProvisionState) []ProvisionTarget {
-	var targets []ProvisionTarget
+func GetValidTargetsFromState(state nodes.ProvisionState) []nodes.TargetProvisionState {
+	var targets []nodes.TargetProvisionState
 	transitions := getValidTransitions(state)
 
 	for _, transition := range transitions {
@@ -579,8 +520,8 @@ func GetValidTargetsFromState(state ProvisionState) []ProvisionTarget {
 // ProvisionStateError represents an error with provision state context.
 type ProvisionStateError struct {
 	NodeID       string
-	CurrentState ProvisionState
-	TargetState  ProvisionTarget
+	CurrentState nodes.ProvisionState
+	TargetState  nodes.TargetProvisionState
 	Err          error
 }
 
@@ -597,8 +538,8 @@ func (e *ProvisionStateError) Unwrap() error {
 func AddProvisionStateError(
 	diags *diag.Diagnostics,
 	nodeID string,
-	currentState ProvisionState,
-	targetState ProvisionTarget,
+	currentState nodes.ProvisionState,
+	targetState nodes.TargetProvisionState,
 	err error,
 ) {
 	provisionErr := &ProvisionStateError{

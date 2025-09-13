@@ -8,7 +8,6 @@ import (
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/httpbasic"
 	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/noauth"
-	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/v1/conductors"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
@@ -259,53 +258,4 @@ func (p *IronicProvider) EphemeralResources(
 	ctx context.Context,
 ) []func() ephemeral.EphemeralResource {
 	return []func() ephemeral.EphemeralResource{}
-}
-
-func healthCheck(ctx context.Context, client *gophercloud.ServiceClient) error {
-	// Perform a simple health check by making a request to the API.
-	// This is a placeholder for actual health check logic.
-	pages, err := conductors.List(client, conductors.ListOpts{}).AllPages(ctx)
-	if err != nil {
-		return fmt.Errorf("ironic API health check failed: %w", err)
-	}
-
-	conductorsList, err := conductors.ExtractConductors(pages)
-	if err != nil {
-		return fmt.Errorf("failed to extract conductors from Ironic API response: %w",
-			err)
-	}
-	for _, conductor := range conductorsList {
-		if !conductor.Alive {
-			tflog.Error(ctx, "Conductor is not alive", map[string]any{
-				"hostname": conductor.Hostname,
-				"alive":    conductor.Alive,
-				"drivers":  conductor.Drivers,
-			})
-			return fmt.Errorf("ironic API health check failed: conductor %s is not alive",
-				conductor.Hostname)
-		}
-		if len(conductor.Drivers) == 0 {
-			tflog.Error(ctx, "Conductor has no drivers", map[string]any{
-				"hostname": conductor.Hostname,
-				"drivers":  conductor.Drivers,
-			})
-			return fmt.Errorf(
-				"ironic API health check failed: conductor %s has no drivers",
-				conductor.Hostname,
-			)
-		}
-		tflog.Info(ctx, "Conductor is alive", map[string]any{
-			"hostname":   conductor.Hostname,
-			"drivers":    conductor.Drivers,
-			"alive":      conductor.Alive,
-			"group":      conductor.ConductorGroup,
-			"created_at": conductor.CreatedAt,
-			"updated_at": conductor.UpdatedAt,
-		})
-	}
-	// If we reach here, the API is considered healthy.
-	tflog.Info(ctx, "Ironic API is healthy", map[string]any{
-		"client": client.Endpoint,
-	})
-	return nil
 }

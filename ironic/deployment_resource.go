@@ -458,6 +458,7 @@ func (r *deploymentResource) Create(
 		configDrive,
 		deploySteps,
 		nil,
+		nil, // serviceSteps
 	); err != nil {
 		resp.Diagnostics.AddError(
 			"Error deploying node",
@@ -578,6 +579,7 @@ func (r *deploymentResource) Delete(
 		nil,
 		nil,
 		nil,
+		nil, // serviceSteps
 	); err != nil {
 		resp.Diagnostics.AddError(
 			"Error deleting deployment",

@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/gophercloud/gophercloud/v2"
+	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/apiversions"
 	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/httpbasic"
 	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/noauth"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -233,6 +234,14 @@ func (p *IronicProvider) Configure(
 		meta.Client = ironic
 	}
 
+	if err := healthCheck(ctx, meta.Client); err != nil {
+		res.Diagnostics.AddError(
+			"Ironic API health check failed",
+			fmt.Sprintf("Error: %s", err.Error()),
+		)
+		return
+	}
+
 	res.DataSourceData = &meta
 	res.ResourceData = &meta
 	res.EphemeralResourceData = &meta
@@ -258,4 +267,27 @@ func (p *IronicProvider) EphemeralResources(
 	ctx context.Context,
 ) []func() ephemeral.EphemeralResource {
 	return []func() ephemeral.EphemeralResource{}
+}
+
+func healthCheck(ctx context.Context, client *gophercloud.ServiceClient) error {
+	apiversionListResp, err := apiversions.List(ctx, client).Extract()
+	if err != nil {
+		return fmt.Errorf("failed to extract conductors from Ironic API response: %w",
+			err)
+	}
+	for _, apiversion := range apiversionListResp.Versions {
+		if apiversion.ID == "v1" && apiversion.Status != "CURRENT" {
+			tflog.Error(ctx, "v1 API version is not current", map[string]any{
+				"version": apiversion.Version,
+				"status":  apiversion.Status,
+			})
+			return fmt.Errorf("ironic API health check failed: API version %s is not current",
+				apiversion.Version)
+		}
+	}
+	// If we reach here, the API is considered healthy.
+	tflog.Info(ctx, "Ironic API is healthy", map[string]any{
+		"client": client.Endpoint,
+	})
+	return nil
 }

@@ -22,43 +22,56 @@ type StateTransition struct {
 // stateTransitions defines the valid state transitions based on the state diagram.
 var stateTransitions = []StateTransition{
 	// From enroll
-	{nodes.Enroll, nodes.TargetManage, nodes.Manageable},
+	{nodes.Enroll, nodes.TargetManage, nodes.Verifying},
 
-	// From error
-	{nodes.Error, nodes.TargetDeleted, nodes.Deploying},
+	// From verifying
+	{nodes.Verifying, nodes.TargetManage, nodes.Manageable},
 
 	// From manageable
-	{nodes.Manageable, nodes.TargetManage, nodes.Enroll},
 	{nodes.Manageable, nodes.TargetInspect, nodes.Inspecting},
 	{nodes.Manageable, nodes.TargetClean, nodes.Cleaning},
+	{nodes.Manageable, nodes.TargetProvide, nodes.Cleaning}, // when auto-clean enabled
 	{nodes.Manageable, nodes.TargetAdopt, nodes.Adopting},
+
+	// From available
+	{nodes.Available, nodes.TargetActive, nodes.Deploying},
+	{nodes.Available, nodes.TargetManage, nodes.Manageable},
 
 	// From inspecting
 	{nodes.Inspecting, nodes.TargetManage, nodes.Manageable}, // success
+
+	// From inspect wait
+	{nodes.InspectWait, nodes.TargetManage, nodes.Manageable}, // success
 
 	// From cleaning
 	{nodes.Cleaning, nodes.TargetProvide, nodes.Available}, // success
 	{nodes.Cleaning, nodes.TargetAbort, nodes.Manageable},  // abort
 	{nodes.Cleaning, nodes.TargetClean, nodes.Cleaning},    // clean again
 
-	// From available
-	{nodes.Available, nodes.TargetActive, nodes.Deploying},
-
 	// From deploying
 	{nodes.Deploying, nodes.TargetActive, nodes.Active},     // success
 	{nodes.DeployFail, nodes.TargetDeleted, nodes.Deleting}, // failure
 	{nodes.Deploying, nodes.TargetAbort, nodes.DeployFail},  // abort
 
+	// From deploy wait (wait call-back)
+	{nodes.DeployWait, nodes.TargetActive, nodes.Active},    // success
+	{nodes.DeployWait, nodes.TargetDeleted, nodes.Deleting}, // abort deployment
+
 	// From active
 	{nodes.Active, nodes.TargetDeleted, nodes.Deleting},
 	{nodes.Active, nodes.TargetRebuild, nodes.Deploying},
 	{nodes.Active, nodes.TargetRescue, nodes.Rescuing},
+	{nodes.Active, nodes.TargetService, nodes.Servicing}, // service operations
 
 	// From deleting
 	{nodes.Deleting, nodes.TargetProvide, nodes.Available}, // success
 
 	// From rescuing
 	{nodes.Rescuing, nodes.TargetRescue, nodes.Rescue}, // success
+
+	// From rescue wait
+	{nodes.RescueWait, nodes.TargetRescue, nodes.Rescue},    // success
+	{nodes.RescueWait, nodes.TargetAbort, nodes.RescueFail}, // abort
 
 	// From rescued
 	{nodes.Rescue, nodes.TargetUnrescue, nodes.Unrescuing},
@@ -68,6 +81,37 @@ var stateTransitions = []StateTransition{
 
 	// From adopting
 	{nodes.Adopting, nodes.TargetManage, nodes.Manageable}, // success
+
+	// From error
+	{nodes.Error, nodes.TargetDeleted, nodes.Deleting}, // fixed: should go to deleting
+
+	// From servicing
+	{nodes.Servicing, nodes.TargetService, nodes.Active},    // success
+	{nodes.Servicing, nodes.TargetAbort, nodes.ServiceFail}, // abort
+
+	// From service wait
+	{nodes.ServiceWait, nodes.TargetService, nodes.Active},    // success
+	{nodes.ServiceWait, nodes.TargetAbort, nodes.ServiceFail}, // abort
+
+	// Recovery from failure states
+	// From rescue failed
+	{nodes.RescueFail, nodes.TargetRescue, nodes.Rescuing},
+	{nodes.RescueFail, nodes.TargetUnrescue, nodes.Unrescuing},
+	{nodes.RescueFail, nodes.TargetDeleted, nodes.Deleting},
+
+	// From unrescue failed
+	{nodes.UnrescueFail, nodes.TargetRescue, nodes.Rescuing},
+	{nodes.UnrescueFail, nodes.TargetUnrescue, nodes.Unrescuing},
+	{nodes.UnrescueFail, nodes.TargetDeleted, nodes.Deleting},
+
+	// From service failed
+	{nodes.ServiceFail, nodes.TargetService, nodes.Servicing},
+	{nodes.ServiceFail, nodes.TargetRescue, nodes.Rescuing},
+	{nodes.ServiceFail, nodes.TargetAbort, nodes.Active},
+
+	// Hold/unhold support (if needed in the future)
+	{nodes.CleanHold, nodes.TargetUnhold, nodes.Cleaning},
+	{nodes.ServiceHold, nodes.TargetUnhold, nodes.Servicing},
 }
 
 // getValidTransitions returns the valid transitions from a given state.
@@ -112,7 +156,9 @@ func isTerminalFailureState(state nodes.ProvisionState) bool {
 		nodes.DeployFail,
 		nodes.Error,
 		nodes.RescueFail,
+		nodes.UnrescueFail,
 		nodes.AdoptFail,
+		nodes.ServiceFail,
 	}
 
 	return slices.Contains(terminalStates, state)
@@ -121,14 +167,20 @@ func isTerminalFailureState(state nodes.ProvisionState) bool {
 // isTransientState checks if a state is transient (will change automatically).
 func isTransientState(state nodes.ProvisionState) bool {
 	transientStates := []nodes.ProvisionState{
+		nodes.Verifying,
 		nodes.Inspecting,
+		nodes.InspectWait,
 		nodes.Cleaning,
+		nodes.CleanWait,
 		nodes.Deploying,
+		nodes.DeployWait,
 		nodes.Deleting,
 		nodes.Rescuing,
+		nodes.RescueWait,
 		nodes.Unrescuing,
 		nodes.Adopting,
-		nodes.CleanWait,
+		nodes.Servicing,
+		nodes.ServiceWait,
 	}
 
 	return slices.Contains(transientStates, state)
@@ -143,6 +195,7 @@ func ChangeProvisionStateToTarget(
 	configDrive any,
 	deploySteps []nodes.DeployStep,
 	cleanSteps []nodes.CleanStep,
+	serviceSteps []nodes.ServiceStep,
 ) error {
 	// Get current node state
 	node, err := nodes.Get(ctx, client, nodeID).Extract()
@@ -170,13 +223,14 @@ func ChangeProvisionStateToTarget(
 
 	// Perform the state change workflow
 	workflow := &provisionWorkflow{
-		ctx:         ctx,
-		client:      client,
-		nodeID:      nodeID,
-		target:      target,
-		configDrive: configDrive,
-		deploySteps: deploySteps,
-		cleanSteps:  cleanSteps,
+		ctx:          ctx,
+		client:       client,
+		nodeID:       nodeID,
+		target:       target,
+		configDrive:  configDrive,
+		deploySteps:  deploySteps,
+		cleanSteps:   cleanSteps,
+		serviceSteps: serviceSteps,
 	}
 
 	return workflow.execute()
@@ -184,13 +238,14 @@ func ChangeProvisionStateToTarget(
 
 // provisionWorkflow manages the state machine execution.
 type provisionWorkflow struct {
-	ctx         context.Context
-	client      *gophercloud.ServiceClient
-	nodeID      string
-	target      nodes.TargetProvisionState
-	configDrive any
-	deploySteps []nodes.DeployStep
-	cleanSteps  []nodes.CleanStep
+	ctx          context.Context
+	client       *gophercloud.ServiceClient
+	nodeID       string
+	target       nodes.TargetProvisionState
+	configDrive  any
+	deploySteps  []nodes.DeployStep
+	cleanSteps   []nodes.CleanStep
+	serviceSteps []nodes.ServiceStep
 }
 
 // execute runs the provision workflow.
@@ -284,6 +339,17 @@ func (w *provisionWorkflow) checkCompletion(currentState nodes.ProvisionState) (
 		return currentState == nodes.Active, nil
 	case nodes.TargetAdopt:
 		return currentState == nodes.Manageable, nil
+	case nodes.TargetService:
+		return currentState == nodes.Active, nil
+	case nodes.TargetUnhold:
+		// Handle unhold completion based on previous state
+		// This is complex and needs state-specific logic
+		holdStates := []nodes.ProvisionState{nodes.CleanHold, nodes.ServiceHold}
+		return !slices.Contains(holdStates, currentState), nil
+	case nodes.TargetAbort:
+		// Handle abort completion based on context
+		// This is complex and needs state-specific logic
+		return !isTransientState(currentState), nil
 	default:
 		return true, fmt.Errorf("unknown target: %s", w.target)
 	}
@@ -367,6 +433,23 @@ func (w *provisionWorkflow) determineNextTarget(
 		if currentState == nodes.Manageable {
 			return nodes.TargetClean
 		}
+
+	case nodes.TargetService:
+		if currentState == nodes.Active {
+			return nodes.TargetService
+		}
+
+	case nodes.TargetAbort:
+		// Handle abort scenarios based on current state
+		if isTransientState(currentState) {
+			return nodes.TargetAbort
+		}
+
+	case nodes.TargetUnhold:
+		// Handle unhold scenarios
+		if currentState == nodes.CleanHold || currentState == nodes.ServiceHold {
+			return nodes.TargetUnhold
+		}
 	}
 
 	return ""
@@ -391,6 +474,16 @@ func (w *provisionWorkflow) changeProvisionState(target nodes.TargetProvisionSta
 		} else {
 			opts.CleanSteps = []nodes.CleanStep{}
 		}
+	case nodes.TargetService:
+		if w.serviceSteps != nil {
+			opts.ServiceSteps = w.serviceSteps
+		} else {
+			opts.ServiceSteps = []nodes.ServiceStep{}
+		}
+	case nodes.TargetAbort:
+		// No additional options typically needed
+	case nodes.TargetUnhold:
+		// No additional options needed
 	}
 
 	tflog.Info(w.ctx, "Executing provision state change", map[string]any{
@@ -491,11 +584,16 @@ func GetNodeProvisionState(
 // ValidateProvisionState checks if a provision state string is valid.
 func ValidateProvisionState(state string) error {
 	validStates := []nodes.ProvisionState{
-		nodes.Enroll, nodes.Manageable, nodes.Inspecting, nodes.InspectFail,
-		nodes.Cleaning, nodes.CleanFail, nodes.CleanWait, nodes.Available,
-		nodes.Active, nodes.Deploying, nodes.DeployFail, nodes.Deleting,
-		nodes.Error, nodes.Rescuing, nodes.Rescue, nodes.RescueFail,
-		nodes.Unrescuing, nodes.Adopting, nodes.AdoptFail,
+		nodes.Enroll, nodes.Verifying, nodes.Manageable,
+		nodes.Inspecting, nodes.InspectWait, nodes.InspectFail,
+		nodes.Cleaning, nodes.CleanFail, nodes.CleanWait, nodes.CleanHold,
+		nodes.Available,
+		nodes.Active, nodes.Deploying, nodes.DeployWait, nodes.DeployFail,
+		nodes.Deleting, nodes.Error, nodes.Rebuild,
+		nodes.Rescuing, nodes.RescueWait, nodes.Rescue, nodes.RescueFail,
+		nodes.Unrescuing, nodes.UnrescueFail,
+		nodes.Adopting, nodes.AdoptFail,
+		nodes.Servicing, nodes.ServiceWait, nodes.ServiceFail, nodes.ServiceHold,
 	}
 
 	if slices.Contains(validStates, nodes.ProvisionState(state)) {

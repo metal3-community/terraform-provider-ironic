@@ -1241,6 +1241,7 @@ func (r *NodeResource) handleActionAttributes(
 			nil,
 			nil,
 			nil,
+			nil, // serviceSteps
 		)
 		if err != nil {
 			diagnostics.AddError(
@@ -1265,6 +1266,7 @@ func (r *NodeResource) handleActionAttributes(
 					nil,
 					nil,
 					nil,
+					nil, // serviceSteps
 				)
 				if err != nil {
 					diagnostics.AddError(
@@ -1290,6 +1292,7 @@ func (r *NodeResource) handleActionAttributes(
 			nil,
 			nil,
 			nil,
+			nil, // serviceSteps
 		)
 		if err != nil {
 			diagnostics.AddError(
@@ -1312,6 +1315,7 @@ func (r *NodeResource) handleActionAttributes(
 			nil,
 			nil,
 			nil,
+			nil, // serviceSteps
 		)
 		if err != nil {
 			diagnostics.AddError(
